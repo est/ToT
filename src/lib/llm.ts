@@ -16,8 +16,8 @@ export async function callLLM(env: Env, messages: LLMMessage[]): Promise<LLMResp
 
   if (!model) throw new Error("No default model configured. Add one in /providers.html");
 
-  const apiKey = model.api_key || env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("No API key configured");
+  const apiKey = model.api_key;
+  if (!apiKey) throw new Error("No API key configured for this model");
 
   const url = `${model.base_url}${model.endpoint}`;
   const res = await fetch(url, {

@@ -29,7 +29,7 @@ export function createChatRoutes() {
     if (!convId) return c.json({ data: null, em: "conversation_id required" });
 
     const conv = await c.env.DB.prepare(
-      "SELECT * FROM chat_conversations WHERE id = ?"
+      "SELECT id, title, hex(focus_id) as focus_id, meta, created_at, updated_at FROM chat_conversations WHERE id = ?"
     ).bind(convId).first();
 
     const nodes = await c.env.DB.prepare(
