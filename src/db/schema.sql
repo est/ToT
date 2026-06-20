@@ -14,3 +14,28 @@ CREATE TABLE IF NOT EXISTS ai_models (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_model ON ai_models(base_url, model_id);
+
+CREATE TABLE IF NOT EXISTS chat_conversations (
+  id         TEXT PRIMARY KEY,
+  title      TEXT NOT NULL DEFAULT 'New Chat',
+  focus_id   BLOB,
+  meta       TEXT DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chat_nodes (
+  conversation_id TEXT NOT NULL,
+  id              BLOB NOT NULL,
+  parents         TEXT NOT NULL DEFAULT '',
+  user_content    TEXT NOT NULL,
+  user_meta       TEXT DEFAULT '{}',
+  assistant_content TEXT NOT NULL DEFAULT '',
+  assistant_meta  TEXT DEFAULT '{}',
+  meta            TEXT DEFAULT '{}',
+  created_at      TEXT NOT NULL,
+  PRIMARY KEY (conversation_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_conv ON chat_nodes(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_node_parents ON chat_nodes(conversation_id, parents);

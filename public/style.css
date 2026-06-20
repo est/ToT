@@ -539,3 +539,138 @@ dialog::backdrop { background: rgba(0, 0, 0, .3); backdrop-filter: blur(2px); }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--green-200); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--green-300); }
+
+/* === Chat: Node tree in sidebar === */
+.tree-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 8px 12px;
+}
+
+.node-tree-inner { padding: 0 4px; }
+
+.node-item {
+  display: flex; align-items: center;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: all .1s;
+}
+
+.node-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.node-item.focus {
+  background: var(--green-100);
+  color: var(--green-800);
+  font-weight: 600;
+}
+
+.node-arrow {
+  width: 14px;
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.node-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.node-children {
+  padding-left: 16px;
+}
+
+/* === Chat: Messages === */
+.msg {
+  max-width: 760px;
+  margin: 0 auto 16px;
+}
+
+.msg-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.msg-user .msg-label { color: var(--green-700); }
+.msg-assistant .msg-label { color: var(--text-muted); }
+
+.msg-body {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+
+.msg-user .msg-body {
+  background: var(--green-50);
+  border: 1px solid var(--green-200);
+  border-radius: var(--radius-lg);
+  padding: 12px 16px;
+}
+
+.msg-assistant .msg-body {
+  padding: 4px 0;
+}
+
+.msg-loading .msg-body { color: var(--text-muted); }
+.msg-error .msg-body { color: #dc2626; font-size: 13px; }
+
+/* Markdown rendered content */
+.msg-body h2 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--green-800);
+  margin: 20px 0 8px;
+  padding: 8px 12px;
+  background: var(--green-50);
+  border-left: 3px solid var(--green-500);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  cursor: pointer;
+  transition: all .12s;
+}
+
+.msg-body h2:hover {
+  background: var(--green-100);
+  border-left-color: var(--green-400);
+}
+
+.msg-body h2::before {
+  content: "▸ ";
+  color: var(--green-500);
+}
+
+.msg-body p { margin: 8px 0; }
+.msg-body ul, .msg-body ol { margin: 8px 0; padding-left: 24px; }
+.msg-body li { margin: 4px 0; }
+.msg-body code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--bg-hover);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.msg-body pre {
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  overflow-x: auto;
+  margin: 12px 0;
+}
+.msg-body pre code {
+  background: none;
+  padding: 0;
+}
+.msg-body blockquote {
+  border-left: 3px solid var(--green-300);
+  padding-left: 12px;
+  color: var(--text-secondary);
+  margin: 12px 0;
+}
