@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 - ChatScatter</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="login-page">
+    <div class="login-card">
+      <h1 class="login-title">ChatScatter</h1>
+      <p class="login-sub">Passkey 登录</p>
+
+      <div id="step-email">
+        <label class="login-label">邮箱</label>
+        <input type="email" id="email" placeholder="you@example.com" autofocus>
+        <div class="login-actions">
+          <button id="btn-register" class="btn-secondary">注册</button>
+          <button id="btn-login" class="btn-primary">登录</button>
+        </div>
+      </div>
+
+      <div id="step-status" style="display:none">
+        <p id="status-text" class="login-status"></p>
+        <button id="btn-retry" class="btn-secondary" style="display:none">重试</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/login.js"></script>
+</body>
+</html>

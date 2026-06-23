@@ -1,26 +1,29 @@
 import { Hono } from "hono";
-import { Env, now, uuid, blobToHex, hexToBytes } from "../lib/types";
+import { Env, User, now, uuid, blobToHex, hexToBytes } from "../lib/types";
 import { callLLM, buildSystemPrompt } from "../lib/llm";
 import { getNextId, buildContext, parseHeadings } from "../lib/context";
 
 export function createChatRoutes() {
-  const api = new Hono<{ Bindings: Env }>();
+  const api = new Hono<{ Bindings: Env; Variables: { user?: User } }>();
 
   api.post("/conversation", async (c) => {
+    const user = c.get("user");
     const body = await c.req.json<{ data?: { title?: string } }>();
     const id = uuid();
     const ts = now();
     const title = body.data?.title || "New Chat";
     await c.env.DB.prepare(
-      "INSERT INTO chat_conversations (id, title, focus_id, meta, created_at, updated_at) VALUES (?, ?, NULL, '{}', ?, ?)"
-    ).bind(id, title, ts, ts).run();
+      "INSERT INTO chat_conversations (id, user_id, title, focus_id, meta, created_at, updated_at) VALUES (?, ?, ?, NULL, '{}', ?, ?)"
+    ).bind(id, user?.id ?? null, title, ts, ts).run();
     return c.json({ data: { id, title }, em: "" });
   });
 
   api.get("/list", async (c) => {
+    const user = c.get("user");
+    if (!user) return c.json({ data: [], em: "" });
     const rows = await c.env.DB.prepare(
-      "SELECT * FROM chat_conversations ORDER BY updated_at DESC"
-    ).all();
+      "SELECT * FROM chat_conversations WHERE user_id = ? ORDER BY updated_at DESC"
+    ).bind(user.id).all();
     return c.json({ data: rows.results, em: "" });
   });
 
@@ -99,27 +102,14 @@ export function createChatRoutes() {
     await c.env.DB.prepare(
       `INSERT INTO chat_nodes (conversation_id, id, parents, user_content, user_meta, assistant_content, assistant_meta, meta, created_at)
        VALUES (?, ?, ?, ?, '{}', ?, '{}', '{}', ?)`
-    ).bind(
-      d.conversation_id,
-      newIdBytes,
-      parents,
-      d.message,
-      assistantContent,
-      ts
-    ).run();
+    ).bind(d.conversation_id, newIdBytes, parents, d.message, assistantContent, ts).run();
 
     await c.env.DB.prepare(
       "UPDATE chat_conversations SET focus_id = ?, updated_at = ? WHERE id = ?"
     ).bind(newIdBytes, ts, d.conversation_id).run();
 
     return c.json({
-      data: {
-        id: newIdHex,
-        parents,
-        user_content: d.message,
-        assistant_content: assistantContent,
-        headings,
-      },
+      data: { id: newIdHex, parents, user_content: d.message, assistant_content: assistantContent, headings },
       em: "",
     });
   });

@@ -307,4 +307,22 @@ function esc(s) {
   return d.innerHTML;
 }
 
-loadConversations();
+async function checkSession() {
+  try {
+    const res = await fetch("/api/auth/me");
+    const json = await res.json();
+    if (json.em === "unauthorized") {
+      window.location.href = "/login";
+      return;
+    }
+    if (json.data) {
+      document.getElementById("main-header-meta").textContent = json.data.email;
+    }
+  } catch {
+    window.location.href = "/login";
+    return;
+  }
+  loadConversations();
+}
+
+checkSession();

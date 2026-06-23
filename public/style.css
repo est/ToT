@@ -741,3 +741,113 @@ dialog::backdrop { background: rgba(0, 0, 0, .3); backdrop-filter: blur(2px); }
   color: #222;
   margin: 12px 0 4px;
 }
+
+/* === Login page === */
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-subtle);
+}
+
+.login-card {
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 40px 36px;
+  width: 360px;
+  box-shadow: var(--shadow-lg);
+}
+
+.login-title {
+  font-size: 24px;
+  font-weight: 800;
+  background: var(--grad-main);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.login-sub {
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 24px;
+}
+
+.login-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.login-card input[type="email"] {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color .15s;
+  margin-bottom: 16px;
+}
+
+.login-card input:focus {
+  border-color: var(--green-400);
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
+}
+
+.login-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.login-actions button {
+  flex: 1;
+  padding: 10px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+}
+
+.btn-primary {
+  background: var(--grad-main);
+  color: white;
+  border: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-primary:hover { box-shadow: var(--shadow-md); }
+
+.btn-secondary {
+  background: var(--bg-white);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.btn-secondary:hover {
+  border-color: var(--green-300);
+  color: var(--green-700);
+}
+
+.login-status {
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 12px 0;
+}
+
+#btn-retry {
+  margin: 12px auto 0;
+  display: block;
+  padding: 8px 24px;
+}
