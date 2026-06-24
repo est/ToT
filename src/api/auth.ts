@@ -3,7 +3,7 @@ import { Env, User, now, packSessionCookie, blobToHex } from "../lib/types";
 import {
   getRpId, getRpOrigin,
   regOptions, regVerify,
-  authOptions, authVerify,
+  authOptions, authOptionsAnonymous, authVerify,
   createUserSession,
 } from "../lib/auth";
 
@@ -68,19 +68,36 @@ export function createAuthRoutes() {
     return c.json({ data: result.options, em: "" });
   });
 
-  api.post("/login/verify", async (c) => {
-    const { data } = await c.req.json<{ data: { email: string; response: any } }>();
-    if (!data?.email || !data?.response) return c.json({ data: null, em: "email and response required" });
+  api.post("/login/options/anonymous", async (c) => {
+    const rpId = getRpId(c.req.raw);
+    const options = await authOptionsAnonymous(rpId);
 
-    const key = `auth:${data.email}`;
+    challenges.set("auth:anonymous", {
+      challenge: options.challenge,
+      email: "",
+      expires: Date.now() + CHALLENGE_TTL * 1000,
+    });
+
+    return c.json({ data: options, em: "" });
+  });
+
+  api.post("/login/verify", async (c) => {
+    const { data } = await c.req.json<{ data: { email?: string; response: any } }>();
+    if (!data?.response) return c.json({ data: null, em: "response required" });
+
+    const email = data.email || "";
+    const key = email ? `auth:${email}` : "auth:anonymous";
+
     const entry = challenges.get(key);
     if (!entry || entry.expires < Date.now()) {
       challenges.delete(key);
       return c.json({ data: null, em: "challenge expired" });
     }
 
-    const user = await authVerify(c.env.DB, data.response, entry.challenge, getRpOrigin(c.req.raw), getRpId(c.req.raw));
+    const challenge = entry.challenge;
     challenges.delete(key);
+
+    const user = await authVerify(c.env.DB, data.response, challenge, getRpOrigin(c.req.raw), getRpId(c.req.raw));
     if (!user) return c.json({ data: null, em: "authentication failed" });
 
     const tokenHex = await createUserSession(c.env.DB, user);

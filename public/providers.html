@@ -2,12 +2,12 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>供应商管理 - Tree of Threads</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div class="app">
+  <div class="app provider-sidebar-hidden">
     <aside class="sidebar">
       <div class="sidebar-header">
         <h1><a href="/" style="color:inherit;text-decoration:none">🌲 ToT</a></h1>
@@ -18,7 +18,10 @@
 
     <main class="main">
       <div class="main-header">
-        <span>供应商管理</span>
+        <div class="main-header-title-wrap">
+          <a href="/" class="btn-mobile-menu">←</a>
+          <span class="main-header-title-text">供应商管理</span>
+        </div>
         <button id="btn-add-provider" class="btn-add-provider-page">＋ 添加供应商</button>
       </div>
       <div class="provider-content" id="provider-content"></div>

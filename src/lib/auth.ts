@@ -114,6 +114,15 @@ export async function authOptions(db: D1Database, rpId: string, email: string) {
   return { options, user };
 }
 
+export async function authOptionsAnonymous(rpId: string) {
+  const options = await generateAuthenticationOptions({
+    rpID: rpId,
+    userVerification: "preferred",
+  });
+
+  return options;
+}
+
 export async function authVerify(
   db: D1Database,
   response: AuthenticationResponseJSON,

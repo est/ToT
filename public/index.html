@@ -2,35 +2,32 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>🌲 Tree of Threads 🪡</title>
   <link rel="stylesheet" href="/style.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
   <div class="app">
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <h1>🌲 Tree of Threads 🪡</h1>
         <div class="header-actions">
           <button id="btn-new-chat" title="新对话">＋</button>
           <a href="/providers.html" class="btn-settings" title="供应商管理">⚙</a>
-          <button id="btn-toggle-sidebar" class="btn-toggle" title="隐藏侧栏">◀</button>
+          <button id="btn-toggle-sidebar" class="btn-toggle" title="隐藏侧栏">✕</button>
         </div>
       </div>
       <nav id="tree"></nav>
     </aside>
 
-    <div class="sidebar-collapsed" id="sidebar-collapsed" style="display:none">
-      <button id="btn-expand-sidebar" class="btn-expand-sidebar" title="展开侧栏">
-        <span class="expand-logo">🌲</span>
-        <span class="expand-arrow">▶</span>
-      </button>
-    </div>
-
     <main class="main">
       <div class="main-header">
-        <span id="main-header-title">Select a conversation</span>
+        <div class="main-header-title-wrap">
+          <button id="btn-mobile-menu" class="btn-mobile-menu" style="display:none">☰</button>
+          <span id="main-header-title" class="main-header-title-text">Select a conversation</span>
+        </div>
         <span id="main-header-meta" class="header-meta"></span>
       </div>
       <div class="messages" id="messages">

@@ -229,6 +229,10 @@ window.selectConv = async function(convId) {
   navigateTo(`/conv/${convId}${activeNodeIdx ? "/" + activeNodeIdx : ""}`);
   renderSidebar();
   renderMessages();
+  if (isMobile()) {
+    document.getElementById("sidebar").classList.remove("visible");
+    document.getElementById("sidebar-overlay").classList.remove("visible");
+  }
 };
 
 window.toggleFold = function(idx) {
@@ -250,7 +254,7 @@ function renderMessages() {
   const title = document.getElementById("main-header-title");
 
   if (!activeConvId || !treeNodes.length) {
-    title.textContent = "Select a conversation";
+    title.innerHTML = isMobile() ? '<span class="brand">ToT 🌲</span> 新对话' : "Select a conversation";
     container.innerHTML = `<div class="empty-state"><div class="empty-state-icon">&gt;_</div><div class="empty-state-text">Start a new conversation</div></div>`;
     return;
   }
@@ -273,7 +277,8 @@ function renderMessages() {
   }
 
   pathNodes = pathNodes.filter(n => n.user_content || n.assistant_content);
-  title.textContent = treeNodes[0]?.title || "Chat";
+  const convTitle = treeNodes[0]?.title || "Chat";
+  title.innerHTML = isMobile() ? `<span class="brand">ToT 🌲</span> ${esc(convTitle)}` : esc(convTitle);
 
   if (!pathNodes.length) {
     container.innerHTML = `<div class="empty-state"><div class="empty-state-text">No messages yet</div></div>`;
@@ -412,15 +417,38 @@ async function sendMessage() {
 
 // --- Sidebar toggle ---
 
-document.getElementById("btn-toggle-sidebar").onclick = () => {
-  document.getElementById("sidebar").classList.add("hidden");
-  document.getElementById("sidebar-collapsed").style.display = "";
+const isMobile = () => window.innerWidth <= 768;
+
+function setupMobileUI() {
+  const mobileBtn = document.getElementById("btn-mobile-menu");
+  if (isMobile()) {
+    mobileBtn.style.display = "";
+    document.getElementById("sidebar").classList.remove("visible");
+  } else {
+    mobileBtn.style.display = "none";
+    document.getElementById("sidebar").classList.remove("visible");
+    document.getElementById("sidebar-overlay").classList.remove("visible");
+  }
+}
+
+document.getElementById("btn-mobile-menu").onclick = () => {
+  document.getElementById("sidebar").classList.add("visible");
+  document.getElementById("sidebar-overlay").classList.add("visible");
 };
 
-document.getElementById("btn-expand-sidebar").onclick = () => {
-  document.getElementById("sidebar").classList.remove("hidden");
-  document.getElementById("sidebar-collapsed").style.display = "none";
+document.getElementById("sidebar-overlay").onclick = () => {
+  document.getElementById("sidebar").classList.remove("visible");
+  document.getElementById("sidebar-overlay").classList.remove("visible");
 };
+
+document.getElementById("btn-toggle-sidebar").onclick = () => {
+  if (isMobile()) {
+    document.getElementById("sidebar").classList.remove("visible");
+    document.getElementById("sidebar-overlay").classList.remove("visible");
+  }
+};
+
+window.addEventListener("resize", setupMobileUI);
 
 // --- New Chat ---
 
@@ -443,6 +471,7 @@ function esc(s) {
 
 async function init() {
   if (!await checkSession()) return;
+  setupMobileUI();
   await loadConversations();
 
   const route = parseRoute();
