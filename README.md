@@ -27,13 +27,13 @@ npm run dev
 本地开发使用 wrangler 内置的 D1。首次运行需要建表：
 
 ```bash
-npx wrangler d1 execute chat-scatter --local --file src/db/schema.sql
+npx wrangler d1 execute tot-db --local --file src/db/schema.sql
 ```
 
 生产环境部署时同样需要：
 
 ```bash
-npx wrangler d1 execute chat-scatter --remote --file src/db/schema.sql
+npx wrangler d1 execute tot-db --remote --file src/db/schema.sql
 ```
 
 ### Passkey 登录

@@ -8,4 +8,4 @@ directory = "./public"
 [[d1_databases]]
 binding = "DB"
 database_name = "tot-db"
-database_id = "85b7c382-a6f1-4bcc-8c57-86e4688d12ff"
+database_id = "efcf5810-18d3-48dd-9249-185534e83155"
