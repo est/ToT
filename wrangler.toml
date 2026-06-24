@@ -1,4 +1,4 @@
-name = "chat-scatter"
+name = "tot"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 
@@ -7,5 +7,5 @@ directory = "./public"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "chat-scatter"
+database_name = "tot-db"
 database_id = "85b7c382-a6f1-4bcc-8c57-86e4688d12ff"
