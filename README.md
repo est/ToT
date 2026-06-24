@@ -1,6 +1,10 @@
 # 🌲 Tree of Threads 🪡
 
-基于 Cloudflare Workers 的 AI 聊天系统。灵感来自 Tree of Thoughts — 将对话组织为不断生长、分叉、折叠的认知树。核心特性：**markdown 分支聊天** — assistant 回复中的 `##` 标题自动成为分支入口，用户可以沿着不同方向深入探索。
+基于 Cloudflare Workers 的 AI 聊天系统。灵感来自 Tree of Thoughts — 将对话组织为不断生长、分叉、折叠的认知树。核心特性：**markdown 分支聊天** ，用户可以沿着不同方向深入探索。适合ADHD宝宝
+
+
+一开始想叫 DAG, scatter/gather，fork 什么的。后来觉得 ToT 缩写好记就换这个了。
+
 
 ## 快速开始
 
