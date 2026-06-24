@@ -24,28 +24,27 @@ let treeNodes = [];
 let sending = false;
 let currentUser = null;
 
-// --- Session check ---
+const LANE_W = 24;
+const ROW_H = 32;
+const DOT_R = 6;
+const COLORS = ["#22c55e", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#14b8a6"];
+
+function laneColor(i) { return COLORS[i % COLORS.length]; }
+
+// --- Session ---
 
 async function checkSession() {
   try {
     const res = await fetch("/api/auth/me");
     const json = await res.json();
-    if (json.em === "unauthorized") {
-      window.location.href = "/login";
-      return;
-    }
+    if (json.em === "unauthorized") { window.location.href = "/login"; return; }
     currentUser = json.data;
-    if (currentUser) {
-      document.getElementById("main-header-meta").textContent = currentUser.email;
-    }
-  } catch {
-    window.location.href = "/login";
-    return;
-  }
+    if (currentUser) document.getElementById("main-header-meta").textContent = currentUser.email;
+  } catch { window.location.href = "/login"; return; }
   loadConversations();
 }
 
-// --- Sidebar: conversation list ---
+// --- Conversations ---
 
 async function loadConversations() {
   conversations = await get("/list");
@@ -59,87 +58,112 @@ function renderSidebar() {
     return;
   }
 
-  const convListHtml = conversations.map(c => {
-    const idx = (c.idx || "").toLowerCase();
-    const isActive = c.conv_id === activeConvId;
-    return `<div class="tree-item ${isActive ? "active" : ""}" onclick="selectConv('${c.conv_id}')">
+  const convListHtml = conversations.map(c =>
+    `<div class="tree-item ${c.conv_id === activeConvId ? "active" : ""}" onclick="selectConv('${c.conv_id}')">
       <span class="tree-item-label">${esc(c.title || c.user_content || "Untitled")}</span>
-    </div>`;
-  }).join("");
+    </div>`
+  ).join("");
 
   if (activeConvId && treeNodes.length) {
     tree.innerHTML = `<div class="conv-list">${convListHtml}</div>
       <div class="tree-divider"></div>
-      <div class="graph-container">${renderGraph()}</div>`;
+      <div class="graph-wrap">${renderGraph()}</div>`;
   } else {
     tree.innerHTML = `<div class="conv-list">${convListHtml}</div>`;
   }
 }
 
-// --- git log --graph rendering ---
+// --- SVG Graph ---
 
 function renderGraph() {
   if (!treeNodes.length) return "";
 
-  // Build lane assignment: each unique prefix_idx path gets a lane
-  const lanes = new Map(); // prefixHex -> lane index
-  let nextLane = 0;
-
-  let html = "";
+  // Assign lanes
+  const laneMap = new Map(); // idx -> lane
+  let maxLane = 0;
 
   for (const node of treeNodes) {
     const idx = node.idx.toLowerCase();
     const prefix = (node.prefix_idx || "").toLowerCase();
     const scatterFrom = node.scatter_from ? node.scatter_from.toLowerCase() : null;
 
-    // Assign lane
-    const laneKey = prefix + idx;
-    if (!lanes.has(laneKey)) {
-      lanes.set(laneKey, nextLane++);
+    if (scatterFrom) {
+      // Branch: use parent's lane + 1
+      const parentLane = laneMap.get(scatterFrom) ?? 0;
+      laneMap.set(idx, parentLane + 1);
+    } else if (prefix) {
+      // Continuation: use last ancestor's lane
+      const lastAncestor = prefix.slice(-4);
+      laneMap.set(idx, laneMap.get(lastAncestor) ?? 0);
+    } else {
+      // Root
+      laneMap.set(idx, 0);
     }
-    const lane = lanes.get(laneKey);
+    maxLane = Math.max(maxLane, laneMap.get(idx));
+  }
 
-    // Determine prefix lane for parent
-    let parentLane = 0;
+  const svgW = (maxLane + 2) * LANE_W + 260;
+  const svgH = treeNodes.length * ROW_H + 16;
+
+  let svg = `<svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}" xmlns="http://www.w3.org/2000/svg">`;
+
+  const focusIdx = (localStorage.getItem(`focus_${activeConvId}`) || "").toLowerCase();
+
+  for (let i = 0; i < treeNodes.length; i++) {
+    const node = treeNodes[i];
+    const idx = node.idx.toLowerCase();
+    const prefix = (node.prefix_idx || "").toLowerCase();
+    const scatterFrom = node.scatter_from ? node.scatter_from.toLowerCase() : null;
+    const lane = laneMap.get(idx) ?? 0;
+    const cx = 12 + lane * LANE_W;
+    const cy = 12 + i * ROW_H;
+    const color = laneColor(lane);
+    const isFocus = idx === focusIdx;
+
+    // Draw connection to parent
     if (prefix) {
-      const parentKey = prefix;
-      // Find parent's lane
-      for (const [k, v] of lanes) {
-        if (k.endsWith(prefix) || k === prefix) {
-          parentLane = v;
-          break;
+      const lastAncestor = prefix.slice(-4);
+      const parentLane = laneMap.get(lastAncestor) ?? 0;
+      const parentRow = treeNodes.findIndex(n => n.idx.toLowerCase() === lastAncestor);
+      if (parentRow >= 0) {
+        const px = 12 + parentLane * LANE_W;
+        const py = 12 + parentRow * ROW_H;
+        if (lane !== parentLane) {
+          // Branch: curved line
+          svg += `<path d="M${px},${py + DOT_R} C${px},${py + ROW_H / 2} ${cx},${cy - ROW_H / 2} ${cx},${cy - DOT_R}" stroke="${color}" stroke-width="2" fill="none" opacity="0.7"/>`;
+        } else {
+          // Straight line
+          svg += `<line x1="${px}" y1="${py + DOT_R}" x2="${cx}" y2="${cy - DOT_R}" stroke="${color}" stroke-width="2" opacity="0.5"/>`;
         }
       }
     }
 
-    const label = node.title || (node.user_content ? node.user_content.slice(0, 30) : `node ${idx}`);
-    const isFocus = idx === (localStorage.getItem(`focus_${activeConvId}`) || "").toLowerCase();
+    // Draw dot
+    svg += `<circle cx="${cx}" cy="${cy}" r="${DOT_R}" fill="${isFocus ? color : "#fff"}" stroke="${color}" stroke-width="2" style="cursor:pointer" onclick="window._graphClick('${idx}')"/>`;
 
-    // Build graph chars
-    const chars = [];
-    const maxLane = Math.max(lane, parentLane, ...Array.from(lanes.values()));
-    for (let i = 0; i <= maxLane; i++) {
-      if (i === lane && i === parentLane) {
-        chars.push("*"); // same lane, continues
-      } else if (i === lane) {
-        chars.push(scatterFrom ? "/" : "*"); // new branch or scatter
-      } else if (i === parentLane) {
-        chars.push("|"); // parent continues
-      } else if (i > parentLane && i < lane) {
-        chars.push("/"); // crossing
-      } else {
-        chars.push(" ");
-      }
+    // Label
+    const label = node.title || (node.user_content ? node.user_content.slice(0, 40) : "");
+    if (label) {
+      const labelX = 12 + (maxLane + 1) * LANE_W + 8;
+      svg += `<text x="${labelX}" y="${cy + 4}" font-size="12" fill="${isFocus ? '#1a1a1a' : '#666'}" font-family="system-ui" style="cursor:pointer" onclick="window._graphClick('${idx}')">${esc(label)}</text>`;
     }
-
-    html += `<div class="graph-line ${isFocus ? "focus" : ""}" onclick="window._scrollToNode('${idx}')">
-      <span class="graph-chars">${chars.map(c => `<span class="graph-${c === "*" ? "star" : c === "/" ? "slash" : c === "|" ? "pipe" : "space"}">${c}</span>`).join("")}</span>
-      <span class="graph-label">${esc(label)}</span>
-    </div>`;
   }
 
-  return html;
+  svg += `</svg>`;
+  return svg;
 }
+
+window._graphClick = function(idx) {
+  localStorage.setItem(`focus_${activeConvId}`, idx);
+  renderSidebar();
+  renderMessages();
+  const el = document.getElementById("msg-" + idx);
+  if (el) {
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("highlight-flash");
+    setTimeout(() => el.classList.remove("highlight-flash"), 1200);
+  }
+};
 
 // --- Actions ---
 
@@ -147,18 +171,15 @@ window.selectConv = async function(convId) {
   activeConvId = convId;
   localStorage.setItem("activeConv", convId);
   await loadTree(convId);
+  // Auto-focus latest if no focus set
+  if (!localStorage.getItem(`focus_${convId}`) && treeNodes.length) {
+    const withContent = treeNodes.filter(n => n.user_content);
+    if (withContent.length) {
+      localStorage.setItem(`focus_${convId}`, withContent[withContent.length - 1].idx.toLowerCase());
+    }
+  }
   renderSidebar();
   renderMessages();
-};
-
-window._scrollToNode = function(idx) {
-  localStorage.setItem(`focus_${activeConvId}`, idx);
-  const el = document.getElementById("msg-" + idx);
-  if (el) {
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
-    el.classList.add("highlight-flash");
-    setTimeout(() => el.classList.remove("highlight-flash"), 1200);
-  }
 };
 
 window.toggleFold = function(idx) {
@@ -185,40 +206,39 @@ function renderMessages() {
     return;
   }
 
-  // Find focus path
-  const focusIdx = localStorage.getItem(`focus_${activeConvId}`);
+  const focusIdx = (localStorage.getItem(`focus_${activeConvId}`) || "").toLowerCase();
   let pathNodes = [];
 
   if (focusIdx) {
-    const focusNode = treeNodes.find(n => n.idx.toLowerCase() === focusIdx.toLowerCase());
+    const focusNode = treeNodes.find(n => n.idx.toLowerCase() === focusIdx);
     if (focusNode) {
-      const prefix = focusNode.prefix_idx || "";
+      const prefix = (focusNode.prefix_idx || "").toLowerCase();
       const ancestorIdxes = prefix.match(/.{4}/g) || [];
       pathNodes = ancestorIdxes
-        .map(hex => treeNodes.find(n => n.idx.toLowerCase() === hex.toLowerCase()))
+        .map(hex => treeNodes.find(n => n.idx.toLowerCase() === hex))
         .filter(Boolean);
       pathNodes.push(focusNode);
     }
   } else {
-    // Default: all root-path nodes
+    // Show all root nodes
     pathNodes = treeNodes.filter(n => !n.prefix_idx || n.prefix_idx === "");
-    if (pathNodes.length) {
-      // Just show the last root node and its ancestors
-      const last = pathNodes[pathNodes.length - 1];
-      pathNodes = [last];
-    }
   }
+
+  // Filter to only nodes with content
+  pathNodes = pathNodes.filter(n => n.user_content || n.assistant_content);
 
   title.textContent = treeNodes[0]?.title || "Chat";
 
-  let html = "";
-  for (const node of pathNodes) {
-    if (node.user_content) {
-      html += renderNodeMessage(node);
-    }
+  if (!pathNodes.length) {
+    container.innerHTML = `<div class="empty-state"><div class="empty-state-text">No messages yet</div></div>`;
+    return;
   }
 
-  container.innerHTML = html || `<div class="empty-state"><div class="empty-state-text">No messages yet</div></div>`;
+  let html = "";
+  for (const node of pathNodes) {
+    html += renderNodeMessage(node);
+  }
+  container.innerHTML = html;
   container.scrollTop = container.scrollHeight;
 }
 
@@ -258,8 +278,17 @@ function renderMarkdown(text, nodeIdx) {
 
 window._branch = async function(nodeIdx, heading) {
   if (!activeConvId) return;
+  const msg = prompt(`Branch to "${heading}" — enter your question:`);
+  if (!msg) return;
+
   try {
-    await post("/branch", { conv_id: activeConvId, node_idx: nodeIdx, heading });
+    const container = document.getElementById("messages");
+    container.innerHTML += `<div class="msg msg-user"><div class="msg-content"><div class="msg-label">You</div><div class="msg-body">${esc(msg)}</div></div></div>
+      <div class="msg msg-assistant msg-loading"><div class="msg-content"><div class="msg-label">AI</div><div class="msg-body"><em>Thinking...</em></div></div></div>`;
+    container.scrollTop = container.scrollHeight;
+
+    const result = await post("/branch", { conv_id: activeConvId, node_idx: nodeIdx, heading, message: msg });
+    if (result.idx) localStorage.setItem(`focus_${activeConvId}`, result.idx.toLowerCase());
     await loadTree(activeConvId);
     renderSidebar();
     renderMessages();
@@ -285,26 +314,29 @@ async function sendMessage() {
   const msg = input.value.trim();
   if (!msg) return;
 
-  if (!activeConvId) {
-    const conv = await post("/conversation", { title: msg.slice(0, 50) });
-    activeConvId = conv.conv_id;
-    localStorage.setItem("activeConv", conv.conv_id);
-    await loadConversations();
-  }
-
   input.value = "";
   input.style.height = "auto";
   sending = true;
 
   const container = document.getElementById("messages");
-  const focusIdx = localStorage.getItem(`focus_${activeConvId}`);
-
   container.innerHTML += `<div class="msg msg-user"><div class="msg-content"><div class="msg-label">You</div><div class="msg-body">${esc(msg)}</div></div></div>
     <div class="msg msg-assistant msg-loading"><div class="msg-content"><div class="msg-label">AI</div><div class="msg-body"><em>Thinking...</em></div></div></div>`;
   container.scrollTop = container.scrollHeight;
 
   try {
-    await post("/send", { conv_id: activeConvId, message: msg, node_idx: focusIdx || undefined });
+    let result;
+    if (!activeConvId) {
+      // New conversation — creates root node with real content
+      result = await post("/conversation", { message: msg });
+      activeConvId = result.conv_id;
+      localStorage.setItem("activeConv", result.conv_id);
+    } else {
+      const focusIdx = localStorage.getItem(`focus_${activeConvId}`);
+      result = await post("/send", { conv_id: activeConvId, message: msg, node_idx: focusIdx || undefined });
+    }
+
+    if (result.idx) localStorage.setItem(`focus_${activeConvId}`, result.idx.toLowerCase());
+    await loadConversations();
     await loadTree(activeConvId);
     renderSidebar();
     renderMessages();
@@ -314,6 +346,18 @@ async function sendMessage() {
     sending = false;
   }
 }
+
+// --- Sidebar toggle ---
+
+document.getElementById("btn-toggle-sidebar").onclick = () => {
+  document.getElementById("sidebar").classList.add("hidden");
+  document.getElementById("btn-show-sidebar").style.display = "";
+};
+
+document.getElementById("btn-show-sidebar").onclick = () => {
+  document.getElementById("sidebar").classList.remove("hidden");
+  document.getElementById("btn-show-sidebar").style.display = "none";
+};
 
 // --- New Chat ---
 
@@ -339,6 +383,11 @@ async function init() {
   if (saved) {
     activeConvId = saved;
     await loadTree(saved);
+    // Auto-focus latest
+    if (!localStorage.getItem(`focus_${saved}`) && treeNodes.length) {
+      const withContent = treeNodes.filter(n => n.user_content);
+      if (withContent.length) localStorage.setItem(`focus_${saved}`, withContent[withContent.length - 1].idx.toLowerCase());
+    }
     renderSidebar();
     renderMessages();
   }

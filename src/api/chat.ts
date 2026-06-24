@@ -8,18 +8,36 @@ export function createChatRoutes() {
 
   api.post("/conversation", async (c) => {
     const user = c.get("user");
-    const body = await c.req.json<{ data?: { title?: string } }>();
+    const body = await c.req.json<{ data?: { message: string } }>();
+    const msg = body.data?.message;
+    if (!msg) return c.json({ data: null, em: "message required" });
+
     const convId = uuid();
     const { bytes: idxBytes, hex: idxHex } = await getNextIdx(c.env, convId);
     const ts = now();
-    const title = body.data?.title || "New Chat";
+
+    const llmMessages = [
+      { role: "system" as const, content: buildSystemPrompt() },
+      { role: "user" as const, content: msg },
+    ];
+
+    let assistantContent = "";
+    try {
+      const result = await callLLM(c.env, llmMessages);
+      assistantContent = result.content;
+    } catch (err: any) {
+      assistantContent = `Error: ${err.message}`;
+    }
+
+    const headings = parseHeadings(assistantContent);
+    const title = msg.slice(0, 50);
 
     await c.env.DB.prepare(
-      `INSERT INTO chat_nodes (conv_id, idx, title, prefix_idx, user_id, user_content, created_at)
-       VALUES (?, ?, ?, X'', ?, ?, ?)`
-    ).bind(convId, idxBytes, title, user?.id ?? null, "", ts).run();
+      `INSERT INTO chat_nodes (conv_id, idx, title, prefix_idx, user_id, user_content, assistant_content, created_at)
+       VALUES (?, ?, ?, X'', ?, ?, ?, ?)`
+    ).bind(convId, idxBytes, title, user?.id ?? null, msg, assistantContent, ts).run();
 
-    return c.json({ data: { conv_id: convId, idx: idxHex, title }, em: "" });
+    return c.json({ data: { conv_id: convId, idx: idxHex, title, user_content: msg, assistant_content: assistantContent, headings }, em: "" });
   });
 
   api.get("/list", async (c) => {
@@ -75,7 +93,7 @@ export function createChatRoutes() {
       }
     } else {
       const latest = await c.env.DB.prepare(
-        "SELECT hex(idx) as idx, hex(prefix_idx) as prefix_idx FROM chat_nodes WHERE conv_id = ? AND user_content != '' ORDER BY idx DESC LIMIT 1"
+        "SELECT hex(idx) as idx, hex(prefix_idx) as prefix_idx FROM chat_nodes WHERE conv_id = ? ORDER BY idx DESC LIMIT 1"
       ).bind(d.conv_id).first<{ idx: string; prefix_idx: string }>();
       if (latest) {
         prefixHex = latest.prefix_idx ? `${latest.prefix_idx}${latest.idx}` : latest.idx;
@@ -118,11 +136,11 @@ export function createChatRoutes() {
   api.post("/branch", async (c) => {
     const user = c.get("user");
     const body = await c.req.json<{
-      data: { conv_id: string; node_idx: string; heading: string };
+      data: { conv_id: string; node_idx: string; heading: string; message: string };
     }>();
     const d = body.data;
-    if (!d.conv_id || !d.node_idx || !d.heading) {
-      return c.json({ data: null, em: "conv_id, node_idx, heading required" });
+    if (!d.conv_id || !d.node_idx || !d.heading || !d.message) {
+      return c.json({ data: null, em: "conv_id, node_idx, heading, message required" });
     }
 
     const { bytes: newIdxBytes, hex: newIdxHex } = await getNextIdx(c.env, d.conv_id);
@@ -134,13 +152,32 @@ export function createChatRoutes() {
       ? `${parentNode.prefix_idx}${d.node_idx}`
       : d.node_idx;
 
-    const ts = now();
-    await c.env.DB.prepare(
-      `INSERT INTO chat_nodes (conv_id, idx, title, prefix_idx, scatter_from, user_id, user_content, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(d.conv_id, newIdxBytes, `[Branch: ${d.heading}]`, hexToBytes(newPrefix), hexToBytes(d.node_idx), user?.id ?? null, "", ts).run();
+    // Build context from parent path
+    const contextMessages = await buildContext(c.env, d.conv_id, newPrefix.length > 4 ? newPrefix.slice(0, -4) : "", d.node_idx);
 
-    return c.json({ data: { idx: newIdxHex, prefix_idx: newPrefix }, em: "" });
+    const llmMessages = [
+      { role: "system" as const, content: buildSystemPrompt() },
+      ...contextMessages.map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
+      { role: "user" as const, content: d.message },
+    ];
+
+    const ts = now();
+    let assistantContent = "";
+    try {
+      const result = await callLLM(c.env, llmMessages);
+      assistantContent = result.content;
+    } catch (err: any) {
+      assistantContent = `Error: ${err.message}`;
+    }
+
+    const headings = parseHeadings(assistantContent);
+
+    await c.env.DB.prepare(
+      `INSERT INTO chat_nodes (conv_id, idx, title, prefix_idx, scatter_from, user_id, user_content, assistant_content, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(d.conv_id, newIdxBytes, `[Branch: ${d.heading}]`, hexToBytes(newPrefix), hexToBytes(d.node_idx), user?.id ?? null, d.message, assistantContent, ts).run();
+
+    return c.json({ data: { idx: newIdxHex, prefix_idx: newPrefix, user_content: d.message, assistant_content: assistantContent, headings }, em: "" });
   });
 
   return api;

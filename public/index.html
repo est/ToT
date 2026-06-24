@@ -9,12 +9,13 @@
 </head>
 <body>
   <div class="app">
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <h1>ChatScatter</h1>
         <div class="header-actions">
           <button id="btn-new-chat" title="新对话">＋</button>
           <a href="/providers.html" class="btn-settings" title="供应商管理">⚙</a>
+          <button id="btn-toggle-sidebar" class="btn-toggle" title="隐藏侧栏">◀</button>
         </div>
       </div>
       <nav id="tree"></nav>
@@ -22,7 +23,10 @@
 
     <main class="main">
       <div class="main-header">
-        <span id="main-header-title">Select a conversation</span>
+        <div class="main-header-left">
+          <button id="btn-show-sidebar" class="btn-toggle btn-show-sidebar" title="显示侧栏" style="display:none">▶</button>
+          <span id="main-header-title">Select a conversation</span>
+        </div>
         <span id="main-header-meta" class="header-meta"></span>
       </div>
       <div class="messages" id="messages">
