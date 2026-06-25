@@ -8,7 +8,7 @@ export function createChatRoutes() {
 
   api.post("/conversation", async (c) => {
     const user = c.get("user");
-    const body = await c.req.json<{ data?: { message: string } }>();
+    const body = await c.req.json<{ data?: { message: string; model_id?: string } }>();
     const msg = body.data?.message;
     if (!msg) return c.json({ data: null, em: "message required" });
 
@@ -22,9 +22,11 @@ export function createChatRoutes() {
     ];
 
     let assistantContent = "";
+    let usedModel = body.data?.model_id || "";
     try {
-      const result = await callLLM(c.env, llmMessages);
+      const result = await callLLM(c.env, llmMessages, body.data?.model_id);
       assistantContent = result.content;
+      usedModel = result.model_id;
     } catch (err: any) {
       assistantContent = `Error: ${err.message}`;
     }
@@ -33,11 +35,11 @@ export function createChatRoutes() {
     const title = msg.slice(0, 50);
 
     await c.env.DB.prepare(
-      `INSERT INTO chat_nodes (conv_id, idx, title, prefix_idx, user_id, user_content, assistant_content, created_at)
-       VALUES (?, ?, ?, X'', ?, ?, ?, ?)`
-    ).bind(convId, idxBytes, title, user?.id ?? null, msg, assistantContent, ts).run();
+      `INSERT INTO chat_nodes (conv_id, idx, title, prefix_idx, user_id, user_content, assistant_content, meta, created_at)
+       VALUES (?, ?, ?, X'', ?, ?, ?, ?, ?)`
+    ).bind(convId, idxBytes, title, user?.id ?? null, msg, assistantContent, JSON.stringify({ model_id: usedModel }), ts).run();
 
-    return c.json({ data: { conv_id: convId, idx: idxHex, title, user_content: msg, assistant_content: assistantContent, headings }, em: "" });
+    return c.json({ data: { conv_id: convId, idx: idxHex, title, user_content: msg, assistant_content: assistantContent, headings, model_id: usedModel }, em: "" });
   });
 
   api.get("/list", async (c) => {
@@ -71,7 +73,7 @@ export function createChatRoutes() {
   api.post("/send", async (c) => {
     const user = c.get("user");
     const body = await c.req.json<{
-      data: { conv_id: string; message: string; node_idx?: string };
+      data: { conv_id: string; message: string; node_idx?: string; model_id?: string };
     }>();
     const d = body.data;
     if (!d.conv_id || !d.message) {
@@ -113,9 +115,11 @@ export function createChatRoutes() {
 
     const ts = now();
     let assistantContent = "";
+    let usedModel = d.model_id || "";
     try {
-      const result = await callLLM(c.env, llmMessages);
+      const result = await callLLM(c.env, llmMessages, d.model_id);
       assistantContent = result.content;
+      usedModel = result.model_id;
     } catch (err: any) {
       assistantContent = `Error: ${err.message}`;
     }
@@ -123,12 +127,12 @@ export function createChatRoutes() {
     const headings = parseHeadings(assistantContent);
 
     await c.env.DB.prepare(
-      `INSERT INTO chat_nodes (conv_id, idx, title, prefix_idx, user_id, user_content, assistant_content, created_at)
-       VALUES (?, ?, '', ?, ?, ?, ?, ?)`
-    ).bind(d.conv_id, newIdxBytes, hexToBytes(prefixHex), user?.id ?? null, d.message, assistantContent, ts).run();
+      `INSERT INTO chat_nodes (conv_id, idx, title, prefix_idx, user_id, user_content, assistant_content, meta, created_at)
+       VALUES (?, ?, '', ?, ?, ?, ?, ?, ?)`
+    ).bind(d.conv_id, newIdxBytes, hexToBytes(prefixHex), user?.id ?? null, d.message, assistantContent, JSON.stringify({ model_id: usedModel }), ts).run();
 
     return c.json({
-      data: { idx: newIdxHex, prefix_idx: prefixHex, user_content: d.message, assistant_content: assistantContent, headings },
+      data: { idx: newIdxHex, prefix_idx: prefixHex, user_content: d.message, assistant_content: assistantContent, headings, model_id: usedModel },
       em: "",
     });
   });
@@ -136,7 +140,7 @@ export function createChatRoutes() {
   api.post("/branch", async (c) => {
     const user = c.get("user");
     const body = await c.req.json<{
-      data: { conv_id: string; node_idx: string; heading: string; message: string };
+      data: { conv_id: string; node_idx: string; heading: string; message: string; model_id?: string };
     }>();
     const d = body.data;
     if (!d.conv_id || !d.node_idx || !d.heading || !d.message) {
@@ -152,7 +156,6 @@ export function createChatRoutes() {
       ? `${parentNode.prefix_idx}${d.node_idx}`
       : d.node_idx;
 
-    // Build context from parent path
     const contextMessages = await buildContext(c.env, d.conv_id, newPrefix.length > 4 ? newPrefix.slice(0, -4) : "", d.node_idx);
 
     const llmMessages = [
@@ -163,9 +166,11 @@ export function createChatRoutes() {
 
     const ts = now();
     let assistantContent = "";
+    let usedModel = d.model_id || "";
     try {
-      const result = await callLLM(c.env, llmMessages);
+      const result = await callLLM(c.env, llmMessages, d.model_id);
       assistantContent = result.content;
+      usedModel = result.model_id;
     } catch (err: any) {
       assistantContent = `Error: ${err.message}`;
     }
@@ -173,11 +178,18 @@ export function createChatRoutes() {
     const headings = parseHeadings(assistantContent);
 
     await c.env.DB.prepare(
-      `INSERT INTO chat_nodes (conv_id, idx, title, prefix_idx, scatter_from, user_id, user_content, assistant_content, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(d.conv_id, newIdxBytes, `[Branch: ${d.heading}]`, hexToBytes(newPrefix), hexToBytes(d.node_idx), user?.id ?? null, d.message, assistantContent, ts).run();
+      `INSERT INTO chat_nodes (conv_id, idx, title, prefix_idx, scatter_from, user_id, user_content, assistant_content, meta, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(d.conv_id, newIdxBytes, `[Branch: ${d.heading}]`, hexToBytes(newPrefix), hexToBytes(d.node_idx), user?.id ?? null, d.message, assistantContent, JSON.stringify({ model_id: usedModel }), ts).run();
 
-    return c.json({ data: { idx: newIdxHex, prefix_idx: newPrefix, user_content: d.message, assistant_content: assistantContent, headings }, em: "" });
+    return c.json({ data: { idx: newIdxHex, prefix_idx: newPrefix, user_content: d.message, assistant_content: assistantContent, headings, model_id: usedModel }, em: "" });
+  });
+
+  api.get("/models", async (c) => {
+    const rows = await c.env.DB.prepare(
+      "SELECT model_id, display_name, provider_name, is_default FROM ai_models ORDER BY provider_name, model_id"
+    ).all();
+    return c.json({ data: rows.results, em: "" });
   });
 
   return api;

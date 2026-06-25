@@ -24,6 +24,8 @@ let activeNodeIdx = null;
 let treeNodes = [];
 let sending = false;
 let currentUser = null;
+let availableModels = [];
+let selectedModelId = localStorage.getItem("selectedModel") || "";
 
 const LANE_W = 24;
 const ROW_H = 32;
@@ -91,6 +93,46 @@ async function checkSession() {
     return true;
   } catch { location.href = "/login"; return false; }
 }
+
+// --- Models ---
+
+async function loadModels() {
+  try {
+    const res = await fetch("/api/chat/models");
+    const json = await res.json();
+    if (json.em) return;
+    availableModels = json.data || [];
+    renderModelSelect();
+  } catch {}
+}
+
+function renderModelSelect() {
+  const select = document.getElementById("model-select");
+  if (!availableModels.length) {
+    select.innerHTML = '<option value="">No models</option>';
+    select.disabled = true;
+    return;
+  }
+
+  select.disabled = false;
+  select.innerHTML = availableModels.map(m => {
+    const label = m.display_name || m.model_id;
+    const provider = m.provider_name ? ` (${m.provider_name})` : '';
+    const defaultMark = m.is_default ? ' ★' : '';
+    return `<option value="${m.model_id}" ${m.model_id === selectedModelId ? 'selected' : ''}>${label}${provider}${defaultMark}</option>`;
+  }).join('');
+
+  if (!selectedModelId && availableModels.length) {
+    const defaultModel = availableModels.find(m => m.is_default) || availableModels[0];
+    selectedModelId = defaultModel.model_id;
+    select.value = selectedModelId;
+  }
+}
+
+document.getElementById("model-select").onchange = (e) => {
+  selectedModelId = e.target.value;
+  localStorage.setItem("selectedModel", selectedModelId);
+};
 
 // --- Conversations ---
 
@@ -342,7 +384,7 @@ window._branch = async function(nodeIdx, heading) {
   container.scrollTop = container.scrollHeight;
 
   try {
-    const result = await post("/branch", { conv_id: activeConvId, node_idx: nodeIdx, heading, message: msg });
+    const result = await post("/branch", { conv_id: activeConvId, node_idx: nodeIdx, heading, message: msg, model_id: selectedModelId || undefined });
     if (result.idx) {
       activeNodeIdx = result.idx.toLowerCase();
       localStorage.setItem(`focus_${activeConvId}`, activeNodeIdx);
@@ -391,10 +433,10 @@ async function sendMessage() {
   try {
     let result;
     if (!activeConvId) {
-      result = await post("/conversation", { message: msg });
+      result = await post("/conversation", { message: msg, model_id: selectedModelId || undefined });
       activeConvId = result.conv_id;
     } else {
-      result = await post("/send", { conv_id: activeConvId, message: msg, node_idx: activeNodeIdx || undefined });
+      result = await post("/send", { conv_id: activeConvId, message: msg, node_idx: activeNodeIdx || undefined, model_id: selectedModelId || undefined });
     }
 
     if (result.idx) {
@@ -472,7 +514,7 @@ function esc(s) {
 async function init() {
   if (!await checkSession()) return;
   setupMobileUI();
-  await loadConversations();
+  await Promise.all([loadConversations(), loadModels()]);
 
   const route = parseRoute();
   if (route.convId) {

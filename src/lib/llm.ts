@@ -7,14 +7,31 @@ export interface LLMMessage {
 
 export interface LLMResponse {
   content: string;
+  model_id: string;
 }
 
-export async function callLLM(env: Env, messages: LLMMessage[]): Promise<LLMResponse> {
-  const model = await env.DB.prepare(
-    "SELECT * FROM ai_models WHERE is_default = 1 LIMIT 1"
-  ).first<AiModel>();
+export async function callLLM(env: Env, messages: LLMMessage[], modelId?: string): Promise<LLMResponse> {
+  let model: AiModel | null = null;
 
-  if (!model) throw new Error("No default model configured. Add one in /providers.html");
+  if (modelId) {
+    model = await env.DB.prepare(
+      "SELECT * FROM ai_models WHERE model_id = ? LIMIT 1"
+    ).bind(modelId).first<AiModel>();
+  }
+
+  if (!model) {
+    model = await env.DB.prepare(
+      "SELECT * FROM ai_models WHERE is_default = 1 LIMIT 1"
+    ).first<AiModel>();
+  }
+
+  if (!model) {
+    model = await env.DB.prepare(
+      "SELECT * FROM ai_models LIMIT 1"
+    ).first<AiModel>();
+  }
+
+  if (!model) throw new Error("No model configured. Add one in /providers.html");
 
   const apiKey = model.api_key;
 
@@ -40,7 +57,7 @@ export async function callLLM(env: Env, messages: LLMMessage[]): Promise<LLMResp
   }
 
   const data = (await res.json()) as any;
-  return { content: data.choices[0].message.content };
+  return { content: data.choices[0].message.content, model_id: model.model_id };
 }
 
 export function buildSystemPrompt(): string {
