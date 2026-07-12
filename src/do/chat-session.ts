@@ -82,18 +82,26 @@ export class ChatSessionDO extends DurableObject<Env> {
       if (!reader) return;
 
       let fullContent = "";
+      let buffer = "";
+      let done = false;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      while (!done) {
+        const { done: streamDone, value } = await reader.read();
+        if (streamDone) break;
 
-        const chunk = new TextDecoder().decode(value);
-        const lines = chunk.split("\n").filter((l) => l.startsWith("data: "));
+        buffer += new TextDecoder().decode(value);
+        const lines = buffer.split("\n");
+
+        // Keep the last incomplete line in buffer
+        buffer = lines.pop() || "";
 
         for (const line of lines) {
-          const data = line.slice(6);
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data: ")) continue;
+
+          const data = trimmed.slice(6);
           if (data === "[DONE]") {
-            await this.broadcast("data: [DONE]\n\n");
+            done = true;
             break;
           }
 
@@ -110,6 +118,24 @@ export class ChatSessionDO extends DurableObject<Env> {
         }
       }
 
+      // Process any remaining buffer
+      if (buffer.trim().startsWith("data: ")) {
+        const data = buffer.trim().slice(6);
+        if (data !== "[DONE]") {
+          try {
+            const parsed = JSON.parse(data);
+            const content = parsed.choices?.[0]?.delta?.content || "";
+            if (content) {
+              fullContent += content;
+              await this.broadcast(
+                `data: ${JSON.stringify({ content })}\n\n`
+              );
+            }
+          } catch {}
+        }
+      }
+
+      await this.broadcast("data: [DONE]\n\n");
       this.ctx.waitUntil(this.persistResult(fullContent, model.model_id, convId, nodeIdx));
     } catch (error: any) {
       await this.broadcast(

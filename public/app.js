@@ -467,31 +467,53 @@ async function sendMessage() {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n");
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+
+        // Keep the last incomplete line in buffer
+        buffer = lines.pop() || "";
 
         for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const data = line.slice(6);
-            if (data === "[DONE]") break;
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data: ")) continue;
 
-            try {
-              const parsed = JSON.parse(data);
-              if (parsed.content) {
-                fullContent += parsed.content;
-                const msgBody = document.querySelector(`#${msgId} .msg-body`);
-                if (msgBody) {
-                  msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
-                  container.scrollTop = container.scrollHeight;
-                }
+          const data = trimmed.slice(6);
+          if (data === "[DONE]") break;
+
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.content) {
+              fullContent += parsed.content;
+              const msgBody = document.querySelector(`#${msgId} .msg-body`);
+              if (msgBody) {
+                msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
+                container.scrollTop = container.scrollHeight;
               }
-            } catch {}
-          }
+            }
+          } catch {}
+        }
+      }
+
+      // Process any remaining buffer
+      if (buffer.trim().startsWith("data: ")) {
+        const data = buffer.trim().slice(6);
+        if (data !== "[DONE]") {
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.content) {
+              fullContent += parsed.content;
+              const msgBody = document.querySelector(`#${msgId} .msg-body`);
+              if (msgBody) {
+                msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
+              }
+            }
+          } catch {}
         }
       }
     }
@@ -533,26 +555,44 @@ async function reconnectToStream(convId, nodeIdx) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let content = "";
+  let buffer = "";
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    const chunk = decoder.decode(value);
-    const lines = chunk.split("\n");
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+
+    // Keep the last incomplete line in buffer
+    buffer = lines.pop() || "";
 
     for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        const data = line.slice(6);
-        if (data === "[DONE]") break;
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data: ")) continue;
 
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.content) {
-            content += parsed.content;
-          }
-        } catch {}
-      }
+      const data = trimmed.slice(6);
+      if (data === "[DONE]") break;
+
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed.content) {
+          content += parsed.content;
+        }
+      } catch {}
+    }
+  }
+
+  // Process any remaining buffer
+  if (buffer.trim().startsWith("data: ")) {
+    const data = buffer.trim().slice(6);
+    if (data !== "[DONE]") {
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed.content) {
+          content += parsed.content;
+        }
+      } catch {}
     }
   }
 
