@@ -9,3 +9,11 @@ directory = "./public"
 binding = "DB"
 database_name = "tot-db"
 database_id = "efcf5810-18d3-48dd-9249-185534e83155"
+
+[[durable_objects.bindings]]
+name = "CHAT_SESSION_DO"
+class_name = "ChatSessionDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["ChatSessionDO"]

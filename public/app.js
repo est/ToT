@@ -426,35 +426,125 @@ async function sendMessage() {
   sending = true;
 
   const container = document.getElementById("messages");
+  const msgId = `msg-${Date.now()}`;
   container.innerHTML += `<div class="msg msg-user"><div class="msg-content"><div class="msg-label">You</div><div class="msg-body">${esc(msg)}</div></div></div>
-    <div class="msg msg-assistant msg-loading"><div class="msg-content"><div class="msg-label">AI</div><div class="msg-body"><em>Thinking...</em></div></div></div>`;
+    <div class="msg msg-assistant" id="${msgId}"><div class="msg-content"><div class="msg-label">AI</div><div class="msg-body"></div></div></div>`;
   container.scrollTop = container.scrollHeight;
 
   try {
-    let result;
+    let nodeIdx, prefixHex;
+
     if (!activeConvId) {
-      result = await post("/conversation", { message: msg, model_id: selectedModelId || undefined });
+      const result = await post("/conversation", { message: msg, model_id: selectedModelId || undefined });
       activeConvId = result.conv_id;
-    } else {
-      result = await post("/send", { conv_id: activeConvId, message: msg, node_idx: activeNodeIdx || undefined, model_id: selectedModelId || undefined });
+      nodeIdx = result.idx;
+      prefixHex = "";
     }
 
-    if (result.idx) {
-      activeNodeIdx = result.idx.toLowerCase();
+    const response = await fetch("/api/chat/send/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        data: {
+          conv_id: activeConvId,
+          message: msg,
+          node_idx: activeNodeIdx || undefined,
+          model_id: selectedModelId || undefined,
+        },
+      }),
+    });
+
+    nodeIdx = response.headers.get("X-Node-Idx") || nodeIdx;
+    prefixHex = response.headers.get("X-Prefix-Hex") || "";
+
+    if (nodeIdx) {
+      activeNodeIdx = nodeIdx.toLowerCase();
       localStorage.setItem(`focus_${activeConvId}`, activeNodeIdx);
       navigateTo(`/conv/${activeConvId}/${activeNodeIdx}`);
     }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const msgBody = document.querySelector(`#${msgId} .msg-body`);
+    let fullContent = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value);
+      const lines = chunk.split("\n");
+
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const data = line.slice(6);
+          if (data === "[DONE]") break;
+
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.content) {
+              fullContent += parsed.content;
+              msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
+              container.scrollTop = container.scrollHeight;
+            }
+          } catch {}
+        }
+      }
+    }
+
     await loadConversations();
     await loadTree(activeConvId);
     renderSidebar();
-    renderMessages();
   } catch (err) {
-    removeLoadingPlaceholder();
-    container.innerHTML += `<div class="msg msg-error"><div class="msg-body">Error: ${esc(err.message)}</div></div>`;
+    const msgBody = document.querySelector(`#${msgId} .msg-body`);
+    if (msgBody) {
+      msgBody.innerHTML = `<span class="error">Error: ${esc(err.message)}</span>`;
+    }
   } finally {
     sending = false;
     input.focus();
   }
+}
+
+async function reconnectToStream(convId, nodeIdx) {
+  const result = await get(`/stream/result?conv_id=${convId}&node_idx=${nodeIdx}`);
+  if (result && result.status === "complete") {
+    return result.content;
+  }
+
+  const response = await fetch(`/api/chat/send/stream?conv_id=${convId}&node_idx=${nodeIdx}`, {
+    method: "GET",
+  });
+
+  if (!response.ok) return null;
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let content = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value);
+    const lines = chunk.split("\n");
+
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        const data = line.slice(6);
+        if (data === "[DONE]") break;
+
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.content) {
+            content += parsed.content;
+          }
+        } catch {}
+      }
+    }
+  }
+
+  return content;
 }
 
 // --- Sidebar toggle ---

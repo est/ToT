@@ -10,3 +10,5 @@ app.get("/api/health", (c) => c.json({ ok: true }));
 app.route("/api", createApiRouter());
 
 export default app;
+
+export { ChatSessionDO } from "./do/chat-session";

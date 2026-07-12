@@ -1,5 +1,6 @@
 export interface Env {
   DB: D1Database;
+  CHAT_SESSION_DO: DurableObjectNamespace;
 }
 
 export interface User {
@@ -45,6 +46,11 @@ export interface ProviderGroup {
   endpoint: string;
   api_format: string;
   models: AiModel[];
+}
+
+export interface LLMMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
 }
 
 export interface ChatNode {

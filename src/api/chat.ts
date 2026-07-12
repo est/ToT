@@ -137,6 +137,97 @@ export function createChatRoutes() {
     });
   });
 
+  api.post("/send/stream", async (c) => {
+    const user = c.get("user");
+    const body = await c.req.json<{
+      data: { conv_id: string; message: string; node_idx?: string; model_id?: string };
+    }>();
+    const d = body.data;
+    if (!d.conv_id || !d.message) {
+      return c.json({ data: null, em: "conv_id and message required" });
+    }
+
+    const { bytes: newIdxBytes, hex: newIdxHex } = await getNextIdx(c.env, d.conv_id);
+
+    let prefixHex = "";
+    let contextIdxHex = "";
+
+    if (d.node_idx) {
+      const targetNode = await c.env.DB.prepare(
+        "SELECT hex(prefix_idx) as prefix_idx FROM chat_nodes WHERE conv_id = ? AND idx = ?"
+      ).bind(d.conv_id, hexToBytes(d.node_idx)).first<{ prefix_idx: string }>();
+      if (targetNode) {
+        prefixHex = targetNode.prefix_idx ? `${targetNode.prefix_idx}${d.node_idx}` : d.node_idx;
+        contextIdxHex = d.node_idx;
+      }
+    } else {
+      const latest = await c.env.DB.prepare(
+        "SELECT hex(idx) as idx, hex(prefix_idx) as prefix_idx FROM chat_nodes WHERE conv_id = ? ORDER BY idx DESC LIMIT 1"
+      ).bind(d.conv_id).first<{ idx: string; prefix_idx: string }>();
+      if (latest) {
+        prefixHex = latest.prefix_idx ? `${latest.prefix_idx}${latest.idx}` : latest.idx;
+        contextIdxHex = latest.idx;
+      }
+    }
+
+    const contextMessages = contextIdxHex
+      ? await buildContext(c.env, d.conv_id, prefixHex.length > 4 ? prefixHex.slice(0, -4) : "", contextIdxHex)
+      : [];
+
+    const llmMessages = [
+      { role: "system" as const, content: buildSystemPrompt() },
+      ...contextMessages.map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
+      { role: "user" as const, content: d.message },
+    ];
+
+    const doId = c.env.CHAT_SESSION_DO.idFromName(d.conv_id);
+    const stub = c.env.CHAT_SESSION_DO.get(doId) as any;
+
+    const response = await stub.chat(llmMessages, d.model_id, d.conv_id, newIdxBytes);
+
+    const ts = now();
+    await c.env.DB.prepare(
+      `INSERT INTO chat_nodes (conv_id, idx, title, prefix_idx, user_id, user_content, assistant_content, meta, created_at)
+       VALUES (?, ?, '', ?, ?, ?, '', ?, ?)`
+    ).bind(d.conv_id, newIdxBytes, hexToBytes(prefixHex), user?.id ?? null, d.message, JSON.stringify({ model_id: d.model_id || "", status: "streaming" }), ts).run();
+
+    return new Response(response.body, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Node-Idx": newIdxHex,
+        "X-Prefix-Hex": prefixHex,
+      },
+    });
+  });
+
+  api.get("/stream/result", async (c) => {
+    const convId = c.req.query("conv_id");
+    const nodeIdx = c.req.query("node_idx");
+    if (!convId || !nodeIdx) {
+      return c.json({ data: null, em: "conv_id and node_idx required" });
+    }
+
+    const node = await c.env.DB.prepare(
+      `SELECT assistant_content, meta FROM chat_nodes WHERE conv_id = ? AND idx = ?`
+    ).bind(convId, hexToBytes(nodeIdx)).first<{ assistant_content: string; meta: string }>();
+
+    if (!node) {
+      return c.json({ data: null, em: "not found" });
+    }
+
+    const meta = JSON.parse(node.meta || "{}");
+    return c.json({
+      data: {
+        content: node.assistant_content,
+        model_id: meta.model_id,
+        status: meta.status || "complete",
+      },
+      em: "",
+    });
+  });
+
   api.post("/branch", async (c) => {
     const user = c.get("user");
     const body = await c.req.json<{
