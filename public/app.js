@@ -529,6 +529,7 @@ async function sendMessage() {
     await loadConversations();
     await loadTree(activeConvId);
     renderSidebar();
+    renderMessages();
   } catch (err) {
     const msgBody = document.querySelector(`#${msgId} .msg-body`);
     if (msgBody) {
