@@ -523,6 +523,16 @@ async function sendMessage() {
 
           try {
             const parsed = JSON.parse(data);
+            // Handle replay (existing content when reconnecting)
+            if (parsed.replay) {
+              fullContent = parsed.replay;
+              const msgBody = document.querySelector(`#${msgId} .msg-body`);
+              if (msgBody) {
+                msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
+                container.scrollTop = container.scrollHeight;
+              }
+            }
+            // Handle new content
             if (parsed.content) {
               fullContent += parsed.content;
               const msgBody = document.querySelector(`#${msgId} .msg-body`);
@@ -541,12 +551,15 @@ async function sendMessage() {
         if (data !== "[DONE]") {
           try {
             const parsed = JSON.parse(data);
+            if (parsed.replay) {
+              fullContent = parsed.replay;
+            }
             if (parsed.content) {
               fullContent += parsed.content;
-              const msgBody = document.querySelector(`#${msgId} .msg-body`);
-              if (msgBody) {
-                msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
-              }
+            }
+            const msgBody = document.querySelector(`#${msgId} .msg-body`);
+            if (msgBody) {
+              msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
             }
           } catch {}
         }

@@ -1,40 +1,93 @@
 import { DurableObject } from "cloudflare:workers";
 import { Env, AiModel, LLMMessage } from "../lib/types";
 
+interface StreamingState {
+  convId: string;
+  nodeIdx: Uint8Array;
+  modelId: string;
+  content: string;
+  status: "streaming" | "complete" | "error";
+  lastSaved: number;
+}
+
 export class ChatSessionDO extends DurableObject<Env> {
   private subscribers: Map<string, WritableStreamDefaultWriter> = new Map();
+  private activeStream: StreamingState | null = null;
 
+  /**
+   * Main entry point for SSE streaming.
+   * Returns SSE Response that streams AI output.
+   */
   async chat(messages: LLMMessage[], modelId: string | undefined, convId: string, nodeIdx: Uint8Array): Promise<Response> {
-    const model = await this.getModel(modelId);
-    if (!model) {
-      return new Response("No model configured", { status: 500 });
-    }
-
     const streamId = crypto.randomUUID();
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
     const encoder = new TextEncoder();
 
+    // Register subscriber
     this.subscribers.set(streamId, writer);
+    writer.closed.then(() => this.subscribers.delete(streamId)).catch(() => this.subscribers.delete(streamId));
 
-    writer.closed.then(() => {
-      this.subscribers.delete(streamId);
-    }).catch(() => {
-      this.subscribers.delete(streamId);
+    // Check if we already have content for this node
+    const existing = await this.getExistingContent(convId, nodeIdx);
+    if (existing) {
+      if (existing.status === "complete") {
+        // Already done - replay full content and close
+        await writer.write(encoder.encode(`data: ${JSON.stringify({ content: existing.content })}\n\n`));
+        await writer.write(encoder.encode("data: [DONE]\n\n"));
+        await writer.close();
+        return new Response(readable, {
+          headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
+        });
+      }
+
+      if (existing.status === "streaming" && existing.content) {
+        // Partial content exists - replay what we have so far
+        await writer.write(encoder.encode(`data: ${JSON.stringify({ replay: existing.content })}\n\n`));
+        // Continue streaming from where we left off (handled by streamAI checking state)
+      }
+    }
+
+    // Start streaming in background
+    const model = await this.getModel(modelId);
+    if (!model) {
+      await writer.write(encoder.encode(`data: ${JSON.stringify({ error: "No model configured" })}\n\n`));
+      await writer.close();
+      return new Response(readable, {
+        headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
+      });
+    }
+
+    // Use blockConcurrencyWhile to ensure streamAI keeps running
+    this.ctx.blockConcurrencyWhile(async () => {
+      await this.streamAI(messages, model, convId, nodeIdx);
     });
 
-    this.ctx.waitUntil(this.streamAI(messages, model, encoder, convId, nodeIdx));
-
     return new Response(readable, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "X-Stream-Id": streamId,
-      },
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
     });
   }
 
+  /**
+   * Get existing content from D1 for this node.
+   */
+  private async getExistingContent(convId: string, nodeIdx: Uint8Array): Promise<{ content: string; status: string } | null> {
+    const row = await this.env.DB.prepare(
+      `SELECT assistant_content, meta FROM chat_nodes WHERE conv_id = ? AND idx = ?`
+    ).bind(convId, nodeIdx).first<{ assistant_content: string; meta: string }>();
+
+    if (!row) return null;
+
+    const meta = JSON.parse(row.meta || "{}");
+    return {
+      content: row.assistant_content,
+      status: meta.status || "complete",
+    };
+  }
+
+  /**
+   * Broadcast data to all connected subscribers.
+   */
   private async broadcast(data: string) {
     const encoder = new TextEncoder();
     const deadStreams: string[] = [];
@@ -52,24 +105,22 @@ export class ChatSessionDO extends DurableObject<Env> {
     }
   }
 
-  private async streamAI(messages: LLMMessage[], model: AiModel, encoder: TextEncoder, convId: string, nodeIdx: Uint8Array) {
+  /**
+   * Stream AI response, persisting incrementally.
+   * This runs inside blockConcurrencyWhile, so it won't be interrupted.
+   */
+  private async streamAI(messages: LLMMessage[], model: AiModel, convId: string, nodeIdx: Uint8Array) {
+    const modelId = model.model_id;
+
     try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (model.api_key) {
-        headers["Authorization"] = `Bearer ${model.api_key}`;
-      }
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (model.api_key) headers["Authorization"] = `Bearer ${model.api_key}`;
 
       const url = `${model.base_url}${model.endpoint}/chat/completions`;
       const response = await fetch(url, {
         method: "POST",
         headers,
-        body: JSON.stringify({
-          model: model.model_id,
-          messages,
-          stream: true,
-        }),
+        body: JSON.stringify({ model: model.model_id, messages, stream: true }),
       });
 
       if (!response.ok) {
@@ -81,10 +132,17 @@ export class ChatSessionDO extends DurableObject<Env> {
       const reader = response.body?.getReader();
       if (!reader) return;
 
-      let fullContent = "";
+      // Initialize or resume state
+      const existing = await this.getExistingContent(convId, nodeIdx);
+      let fullContent = existing?.content || "";
       let buffer = "";
       let done = false;
       const decoder = new TextDecoder();
+      let lastSaveTime = Date.now();
+      const SAVE_INTERVAL = 2000; // Save every 2 seconds
+
+      // Mark as streaming
+      await this.persistProgress(fullContent, modelId, convId, nodeIdx, "streaming");
 
       while (!done) {
         const { done: streamDone, value } = await reader.read();
@@ -92,8 +150,6 @@ export class ChatSessionDO extends DurableObject<Env> {
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
-
-        // Keep the last incomplete line in buffer
         buffer = lines.pop() || "";
 
         for (const line of lines) {
@@ -111,15 +167,20 @@ export class ChatSessionDO extends DurableObject<Env> {
             const content = parsed.choices?.[0]?.delta?.content || "";
             if (content) {
               fullContent += content;
-              await this.broadcast(
-                `data: ${JSON.stringify({ content })}\n\n`
-              );
+              await this.broadcast(`data: ${JSON.stringify({ content })}\n\n`);
+
+              // Incremental save
+              const now = Date.now();
+              if (now - lastSaveTime > SAVE_INTERVAL) {
+                await this.persistProgress(fullContent, modelId, convId, nodeIdx, "streaming");
+                lastSaveTime = now;
+              }
             }
           } catch {}
         }
       }
 
-      // Process any remaining buffer
+      // Process remaining buffer
       if (buffer.trim().startsWith("data: ")) {
         const data = buffer.trim().slice(6);
         if (data !== "[DONE]") {
@@ -128,37 +189,39 @@ export class ChatSessionDO extends DurableObject<Env> {
             const content = parsed.choices?.[0]?.delta?.content || "";
             if (content) {
               fullContent += content;
-              await this.broadcast(
-                `data: ${JSON.stringify({ content })}\n\n`
-              );
+              await this.broadcast(`data: ${JSON.stringify({ content })}\n\n`);
             }
           } catch {}
         }
       }
 
+      // Final save - mark as complete
+      await this.persistProgress(fullContent, modelId, convId, nodeIdx, "complete");
       await this.broadcast("data: [DONE]\n\n");
-      this.ctx.waitUntil(this.persistResult(fullContent, model.model_id, convId, nodeIdx));
+
     } catch (error: any) {
-      await this.broadcast(
-        `data: ${JSON.stringify({ error: error.message })}\n\n`
-      );
+      await this.broadcast(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+      // Save error state
+      await this.persistProgress("", modelId, convId, nodeIdx, "error");
     }
   }
 
-  private async persistResult(content: string, modelId: string, convId: string, nodeIdx: Uint8Array) {
-    // Try UPDATE first, then INSERT if row doesn't exist
+  /**
+   * Persist streaming progress to D1.
+   */
+  private async persistProgress(content: string, modelId: string, convId: string, nodeIdx: Uint8Array, status: string) {
     const result = await this.env.DB.prepare(
       `UPDATE chat_nodes 
        SET assistant_content = ?, meta = ?
        WHERE conv_id = ? AND idx = ?`
     ).bind(
       content,
-      JSON.stringify({ model_id: modelId, status: "complete" }),
+      JSON.stringify({ model_id: modelId, status }),
       convId,
       nodeIdx
     ).run();
 
-    // If no rows were updated, insert a new row
+    // If row doesn't exist yet, insert it
     if (result.meta?.changes === 0) {
       const ts = Math.floor(Date.now() / 1000);
       await this.env.DB.prepare(
@@ -168,7 +231,7 @@ export class ChatSessionDO extends DurableObject<Env> {
         convId,
         nodeIdx,
         content,
-        JSON.stringify({ model_id: modelId, status: "complete" }),
+        JSON.stringify({ model_id: modelId, status }),
         ts
       ).run();
     }
@@ -190,7 +253,6 @@ export class ChatSessionDO extends DurableObject<Env> {
     for (const step of steps) {
       const model = await this.getModel(step.modelId);
       if (!model) throw new Error("No model configured");
-
       const result = await this.callAI([...step.messages, { role: "user", content: context }], model);
       context = result;
     }
@@ -198,23 +260,18 @@ export class ChatSessionDO extends DurableObject<Env> {
   }
 
   async parallelCalls(tasks: Array<{ messages: LLMMessage[]; modelId?: string }>): Promise<string[]> {
-    const results = await Promise.all(
+    return Promise.all(
       tasks.map(async (task) => {
         const model = await this.getModel(task.modelId);
         if (!model) throw new Error("No model configured");
         return this.callAI(task.messages, model);
       })
     );
-    return results;
   }
 
   private async callAI(messages: LLMMessage[], model: AiModel): Promise<string> {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-    if (model.api_key) {
-      headers["Authorization"] = `Bearer ${model.api_key}`;
-    }
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (model.api_key) headers["Authorization"] = `Bearer ${model.api_key}`;
 
     const response = await fetch(`${model.base_url}${model.endpoint}/chat/completions`, {
       method: "POST",
@@ -222,10 +279,7 @@ export class ChatSessionDO extends DurableObject<Env> {
       body: JSON.stringify({ model: model.model_id, messages, stream: false }),
     });
 
-    if (!response.ok) {
-      throw new Error(`AI error: ${response.status}`);
-    }
-
+    if (!response.ok) throw new Error(`AI error: ${response.status}`);
     const data = await response.json<any>();
     return data.choices[0].message.content;
   }
