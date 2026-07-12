@@ -119,15 +119,13 @@ export class ChatSessionDO extends DurableObject<Env> {
   }
 
   private async persistResult(content: string, modelId: string, convId: string, nodeIdx: Uint8Array) {
-    const ts = Math.floor(Date.now() / 1000);
     await this.env.DB.prepare(
       `UPDATE chat_nodes 
-       SET assistant_content = ?, meta = ?, updated_at = ?
+       SET assistant_content = ?, meta = ?
        WHERE conv_id = ? AND idx = ?`
     ).bind(
       content,
       JSON.stringify({ model_id: modelId, status: "complete" }),
-      ts,
       convId,
       nodeIdx
     ).run();
