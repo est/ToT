@@ -183,17 +183,29 @@ export class ChatSessionDO extends DurableObject<Env> {
     activeStreamKey: string
   ) {
     const modelId = model.model_id;
+    const TIMEOUT_MS = 5 * 60 * 1000; // 5 minute timeout
 
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (model.api_key) headers["Authorization"] = `Bearer ${model.api_key}`;
 
       const url = `${model.base_url}${model.endpoint}/chat/completions`;
-      const response = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ model: model.model_id, messages, stream: true }),
-      });
+      
+      // Use AbortController for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ model: model.model_id, messages, stream: true }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         const error = await response.text();
@@ -277,6 +289,14 @@ export class ChatSessionDO extends DurableObject<Env> {
       await this.broadcast(`data: ${JSON.stringify({ error: error.message })}\n\n`);
       // Save error message in D1 with status "error"
       await this.persistProgress("", modelId, convId, nodeIdx, "error", error.message);
+    } finally {
+      // Clean up: close all subscriber writers to release resources
+      for (const [id, writer] of this.subscribers) {
+        try {
+          await writer.close();
+        } catch {}
+      }
+      this.subscribers.clear();
     }
   }
 
