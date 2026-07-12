@@ -84,12 +84,13 @@ export class ChatSessionDO extends DurableObject<Env> {
       let fullContent = "";
       let buffer = "";
       let done = false;
+      const decoder = new TextDecoder();
 
       while (!done) {
         const { done: streamDone, value } = await reader.read();
         if (streamDone) break;
 
-        buffer += new TextDecoder().decode(value);
+        buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
 
         // Keep the last incomplete line in buffer
