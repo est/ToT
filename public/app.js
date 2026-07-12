@@ -433,62 +433,74 @@ async function sendMessage() {
 
   try {
     let nodeIdx, prefixHex;
+    let fullContent = "";
 
     if (!activeConvId) {
+      // New conversation: /conversation handles both user message and AI response
       const result = await post("/conversation", { message: msg, model_id: selectedModelId || undefined });
       activeConvId = result.conv_id;
       nodeIdx = result.idx;
-      prefixHex = "";
-    }
+      fullContent = result.assistant_content;
+    } else {
+      // Existing conversation: use streaming endpoint
+      const response = await fetch("/api/chat/send/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          data: {
+            conv_id: activeConvId,
+            message: msg,
+            node_idx: activeNodeIdx || undefined,
+            model_id: selectedModelId || undefined,
+          },
+        }),
+      });
 
-    const response = await fetch("/api/chat/send/stream", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        data: {
-          conv_id: activeConvId,
-          message: msg,
-          node_idx: activeNodeIdx || undefined,
-          model_id: selectedModelId || undefined,
-        },
-      }),
-    });
+      nodeIdx = response.headers.get("X-Node-Idx") || nodeIdx;
+      prefixHex = response.headers.get("X-Prefix-Hex") || "";
 
-    nodeIdx = response.headers.get("X-Node-Idx") || nodeIdx;
-    prefixHex = response.headers.get("X-Prefix-Hex") || "";
+      if (nodeIdx) {
+        activeNodeIdx = nodeIdx.toLowerCase();
+        localStorage.setItem(`focus_${activeConvId}`, activeNodeIdx);
+        navigateTo(`/conv/${activeConvId}/${activeNodeIdx}`);
+      }
 
-    if (nodeIdx) {
-      activeNodeIdx = nodeIdx.toLowerCase();
-      localStorage.setItem(`focus_${activeConvId}`, activeNodeIdx);
-      navigateTo(`/conv/${activeConvId}/${activeNodeIdx}`);
-    }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    const msgBody = document.querySelector(`#${msgId} .msg-body`);
-    let fullContent = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n");
 
-      const chunk = decoder.decode(value);
-      const lines = chunk.split("\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+            if (data === "[DONE]") break;
 
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6);
-          if (data === "[DONE]") break;
-
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.content) {
-              fullContent += parsed.content;
-              msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
-              container.scrollTop = container.scrollHeight;
-            }
-          } catch {}
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.content) {
+                fullContent += parsed.content;
+                const msgBody = document.querySelector(`#${msgId} .msg-body`);
+                if (msgBody) {
+                  msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
+                  container.scrollTop = container.scrollHeight;
+                }
+              }
+            } catch {}
+          }
         }
+      }
+    }
+
+    // Render final content for new conversations
+    if (!fullContent && nodeIdx) {
+      const msgBody = document.querySelector(`#${msgId} .msg-body`);
+      if (msgBody) {
+        msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
       }
     }
 

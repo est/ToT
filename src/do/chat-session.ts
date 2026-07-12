@@ -119,7 +119,8 @@ export class ChatSessionDO extends DurableObject<Env> {
   }
 
   private async persistResult(content: string, modelId: string, convId: string, nodeIdx: Uint8Array) {
-    await this.env.DB.prepare(
+    // Try UPDATE first, then INSERT if row doesn't exist
+    const result = await this.env.DB.prepare(
       `UPDATE chat_nodes 
        SET assistant_content = ?, meta = ?
        WHERE conv_id = ? AND idx = ?`
@@ -129,6 +130,21 @@ export class ChatSessionDO extends DurableObject<Env> {
       convId,
       nodeIdx
     ).run();
+
+    // If no rows were updated, insert a new row
+    if (result.meta?.changes === 0) {
+      const ts = Math.floor(Date.now() / 1000);
+      await this.env.DB.prepare(
+        `INSERT INTO chat_nodes (conv_id, idx, prefix_idx, user_content, assistant_content, meta, created_at)
+         VALUES (?, ?, X'', '', ?, ?, ?)`
+      ).bind(
+        convId,
+        nodeIdx,
+        content,
+        JSON.stringify({ model_id: modelId, status: "complete" }),
+        ts
+      ).run();
+    }
   }
 
   private async getModel(modelId?: string): Promise<AiModel | null> {
