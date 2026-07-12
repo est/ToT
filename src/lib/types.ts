@@ -1,6 +1,8 @@
+import type { ChatSessionDO } from "../do/chat-session";
+
 export interface Env {
   DB: D1Database;
-  CHAT_SESSION_DO: DurableObjectNamespace;
+  CHAT_SESSION_DO: DurableObjectNamespace<ChatSessionDO>;
 }
 
 export interface User {

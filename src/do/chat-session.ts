@@ -6,19 +6,24 @@ interface StreamingState {
   nodeIdx: Uint8Array;
   modelId: string;
   content: string;
-  status: "streaming" | "complete" | "error";
+  status: "streaming" | "complete" | "error" | "interrupted";
   lastSaved: number;
 }
 
 export class ChatSessionDO extends DurableObject<Env> {
   private subscribers: Map<string, WritableStreamDefaultWriter> = new Map();
-  private activeStream: StreamingState | null = null;
 
   /**
    * Main entry point for SSE streaming.
    * Returns SSE Response that streams AI output.
    */
-  async chat(messages: LLMMessage[], modelId: string | undefined, convId: string, nodeIdx: Uint8Array): Promise<Response> {
+  async chat(
+    messages: LLMMessage[],
+    modelId: string | undefined,
+    convId: string,
+    nodeIdx: Uint8Array,
+    userMessage: { user_content: string; prefix_idx: Uint8Array; title: string; user_id: number | null }
+  ): Promise<Response> {
     const streamId = crypto.randomUUID();
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
@@ -30,6 +35,14 @@ export class ChatSessionDO extends DurableObject<Env> {
 
     // Check if we already have content for this node
     const existing = await this.getExistingContent(convId, nodeIdx);
+
+    // Check for active stream via DO storage
+    const activeStreamKey = `stream:${convId}:${Array.from(nodeIdx).join(",")}`;
+    const activeStreamMeta = await this.ctx.storage.get<{
+      streamId: string;
+      startedAt: number;
+    }>(activeStreamKey);
+
     if (existing) {
       if (existing.status === "complete") {
         // Already done - replay full content and close
@@ -41,27 +54,72 @@ export class ChatSessionDO extends DurableObject<Env> {
         });
       }
 
-      if (existing.status === "streaming" && existing.content) {
-        // Partial content exists - replay what we have so far
-        await writer.write(encoder.encode(`data: ${JSON.stringify({ replay: existing.content })}\n\n`));
-        // Continue streaming from where we left off (handled by streamAI checking state)
+      // Check for stale stream (streaming > 5 minutes)
+      if (existing.status === "streaming") {
+        const meta = JSON.parse(existing.rawMeta || "{}");
+        const streamingStartedAt = meta.streaming_started_at;
+        if (streamingStartedAt && Date.now() - streamingStartedAt > 5 * 60 * 1000) {
+          // Stream is stale - mark as interrupted and start fresh
+          await this.persistProgress(existing.content, existing.modelId, convId, nodeIdx, "interrupted");
+        } else if (activeStreamMeta && Date.now() - activeStreamMeta.startedAt < 5 * 60 * 1000) {
+          // Active stream exists and is fresh - subscribe to it
+          if (existing.content) {
+            // Replay what we have so far
+            await writer.write(encoder.encode(`data: ${JSON.stringify({ replay: existing.content })}\n\n`));
+          }
+          // Wait for the stream to complete
+          return new Response(readable, {
+            headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
+          });
+        }
       }
     }
 
-    // Start streaming in background
+    // Insert user message if this is a new conversation node
+    if (!existing) {
+      const ts = Math.floor(Date.now() / 1000);
+      await this.env.DB.prepare(
+        `INSERT INTO chat_nodes (conv_id, idx, prefix_idx, user_content, assistant_content, meta, created_at)
+         VALUES (?, ?, ?, ?, '', ?, ?)`
+      ).bind(
+        convId,
+        nodeIdx,
+        userMessage.prefix_idx,
+        userMessage.user_content,
+        JSON.stringify({
+          title: userMessage.title,
+          user_id: userMessage.user_id,
+          status: "streaming",
+          streaming_started_at: Date.now(),
+        }),
+        ts
+      ).run();
+    }
+
+    // Get model
     const model = await this.getModel(modelId);
     if (!model) {
       await writer.write(encoder.encode(`data: ${JSON.stringify({ error: "No model configured" })}\n\n`));
+      await writer.write(encoder.encode("data: [DONE]\n\n"));
       await writer.close();
       return new Response(readable, {
         headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
       });
     }
 
-    // Use blockConcurrencyWhile to ensure streamAI keeps running
-    this.ctx.blockConcurrencyWhile(async () => {
-      await this.streamAI(messages, model, convId, nodeIdx);
+    // Mark stream as active in DO storage
+    await this.ctx.storage.put(activeStreamKey, {
+      streamId,
+      startedAt: Date.now(),
     });
+
+    // Use ctx.waitUntil to run streaming in background (no blockConcurrencyWhile)
+    this.ctx.waitUntil(
+      this.streamAI(messages, model, convId, nodeIdx, streamId, activeStreamKey).finally(() => {
+        // Clean up active stream marker
+        this.ctx.storage.delete(activeStreamKey);
+      })
+    );
 
     return new Response(readable, {
       headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
@@ -71,7 +129,12 @@ export class ChatSessionDO extends DurableObject<Env> {
   /**
    * Get existing content from D1 for this node.
    */
-  private async getExistingContent(convId: string, nodeIdx: Uint8Array): Promise<{ content: string; status: string } | null> {
+  private async getExistingContent(convId: string, nodeIdx: Uint8Array): Promise<{
+    content: string;
+    modelId: string;
+    status: string;
+    rawMeta: string;
+  } | null> {
     const row = await this.env.DB.prepare(
       `SELECT assistant_content, meta FROM chat_nodes WHERE conv_id = ? AND idx = ?`
     ).bind(convId, nodeIdx).first<{ assistant_content: string; meta: string }>();
@@ -81,7 +144,9 @@ export class ChatSessionDO extends DurableObject<Env> {
     const meta = JSON.parse(row.meta || "{}");
     return {
       content: row.assistant_content,
+      modelId: meta.model_id || "",
       status: meta.status || "complete",
+      rawMeta: row.meta || "{}",
     };
   }
 
@@ -92,24 +157,31 @@ export class ChatSessionDO extends DurableObject<Env> {
     const encoder = new TextEncoder();
     const deadStreams: string[] = [];
 
-    for (const [streamId, writer] of this.subscribers) {
+    for (const [id, writer] of this.subscribers) {
       try {
         await writer.write(encoder.encode(data));
       } catch {
-        deadStreams.push(streamId);
+        deadStreams.push(id);
       }
     }
 
-    for (const streamId of deadStreams) {
-      this.subscribers.delete(streamId);
+    for (const id of deadStreams) {
+      this.subscribers.delete(id);
     }
   }
 
   /**
    * Stream AI response, persisting incrementally.
-   * This runs inside blockConcurrencyWhile, so it won't be interrupted.
+   * Uses ctx.waitUntil, so it won't block other DO operations.
    */
-  private async streamAI(messages: LLMMessage[], model: AiModel, convId: string, nodeIdx: Uint8Array) {
+  private async streamAI(
+    messages: LLMMessage[],
+    model: AiModel,
+    convId: string,
+    nodeIdx: Uint8Array,
+    streamId: string,
+    activeStreamKey: string
+  ) {
     const modelId = model.model_id;
 
     try {
@@ -126,6 +198,8 @@ export class ChatSessionDO extends DurableObject<Env> {
       if (!response.ok) {
         const error = await response.text();
         await this.broadcast(`data: ${JSON.stringify({ error })}\n\n`);
+        // Store error message in D1
+        await this.persistProgress("", modelId, convId, nodeIdx, "error", error);
         return;
       }
 
@@ -201,39 +275,49 @@ export class ChatSessionDO extends DurableObject<Env> {
 
     } catch (error: any) {
       await this.broadcast(`data: ${JSON.stringify({ error: error.message })}\n\n`);
-      // Save error state
-      await this.persistProgress("", modelId, convId, nodeIdx, "error");
+      // Save error message in D1 with status "error"
+      await this.persistProgress("", modelId, convId, nodeIdx, "error", error.message);
     }
   }
 
   /**
    * Persist streaming progress to D1.
+   * Only UPDATE, never INSERT - user message must already exist.
    */
-  private async persistProgress(content: string, modelId: string, convId: string, nodeIdx: Uint8Array, status: string) {
+  private async persistProgress(
+    content: string,
+    modelId: string,
+    convId: string,
+    nodeIdx: Uint8Array,
+    status: string,
+    errorMessage?: string
+  ) {
+    const meta: Record<string, any> = { model_id: modelId, status };
+
+    // Add streaming_started_at when starting
+    if (status === "streaming") {
+      meta.streaming_started_at = Date.now();
+    }
+
+    // Store error message if present
+    if (errorMessage) {
+      meta.error = errorMessage;
+    }
+
     const result = await this.env.DB.prepare(
       `UPDATE chat_nodes 
        SET assistant_content = ?, meta = ?
        WHERE conv_id = ? AND idx = ?`
     ).bind(
       content,
-      JSON.stringify({ model_id: modelId, status }),
+      JSON.stringify(meta),
       convId,
       nodeIdx
     ).run();
 
-    // If row doesn't exist yet, insert it
+    // If UPDATE fails (0 rows), log error but don't create ghost records
     if (result.meta?.changes === 0) {
-      const ts = Math.floor(Date.now() / 1000);
-      await this.env.DB.prepare(
-        `INSERT INTO chat_nodes (conv_id, idx, prefix_idx, user_content, assistant_content, meta, created_at)
-         VALUES (?, ?, X'', '', ?, ?, ?)`
-      ).bind(
-        convId,
-        nodeIdx,
-        content,
-        JSON.stringify({ model_id: modelId, status }),
-        ts
-      ).run();
+      console.error(`persistProgress: No row found for conv_id=${convId}, idx=${nodeIdx}. Status=${status}`);
     }
   }
 

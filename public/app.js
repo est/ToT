@@ -501,69 +501,35 @@ async function sendMessage() {
       }
 
       const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-
-        // Keep the last incomplete line in buffer
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data: ")) continue;
-
-          const data = trimmed.slice(6);
-          if (data === "[DONE]") break;
-
-          try {
-            const parsed = JSON.parse(data);
-            // Handle replay (existing content when reconnecting)
-            if (parsed.replay) {
-              fullContent = parsed.replay;
-              const msgBody = document.querySelector(`#${msgId} .msg-body`);
-              if (msgBody) {
-                msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
-                container.scrollTop = container.scrollHeight;
-              }
-            }
-            // Handle new content
-            if (parsed.content) {
-              fullContent += parsed.content;
-              const msgBody = document.querySelector(`#${msgId} .msg-body`);
-              if (msgBody) {
-                msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
-                container.scrollTop = container.scrollHeight;
-              }
-            }
-          } catch {}
-        }
-      }
-
-      // Process any remaining buffer
-      if (buffer.trim().startsWith("data: ")) {
-        const data = buffer.trim().slice(6);
-        if (data !== "[DONE]") {
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.replay) {
-              fullContent = parsed.replay;
-            }
-            if (parsed.content) {
-              fullContent += parsed.content;
-            }
-            const msgBody = document.querySelector(`#${msgId} .msg-body`);
+      await parseSSEStream(reader, {
+        onReplay: (content) => {
+          fullContent = content;
+          const msgBody = document.querySelector(`#${msgId} .msg-body`);
+          if (msgBody) {
+            msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
+            container.scrollTop = container.scrollHeight;
+          }
+        },
+        onContent: (content) => {
+          fullContent += content;
+          const msgBody = document.querySelector(`#${msgId} .msg-body`);
+          if (msgBody) {
+            msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
+            container.scrollTop = container.scrollHeight;
+          }
+        },
+        onError: (error) => {
+          const msgEl = document.getElementById(msgId);
+          if (msgEl) {
+            msgEl.classList.add("msg-error");
+            const msgBody = msgEl.querySelector(".msg-body");
             if (msgBody) {
-              msgBody.innerHTML = renderMarkdown(fullContent, nodeIdx || "");
+              msgBody.innerHTML = `Error: ${esc(error)}<br><button class="msg-retry-btn" onclick="sendMessage()">Retry</button>`;
             }
-          } catch {}
-        }
-      }
+          }
+        },
+      });
     }
 
     // Render final content for new conversations
@@ -579,9 +545,13 @@ async function sendMessage() {
     renderSidebar();
     renderMessages();
   } catch (err) {
-    const msgBody = document.querySelector(`#${msgId} .msg-body`);
-    if (msgBody) {
-      msgBody.innerHTML = `<span class="error">Error: ${esc(err.message)}</span>`;
+    const msgEl = document.getElementById(msgId);
+    if (msgEl) {
+      msgEl.classList.add("msg-error");
+      const msgBody = msgEl.querySelector(".msg-body");
+      if (msgBody) {
+        msgBody.innerHTML = `Error: ${esc(err.message)}<br><button class="msg-retry-btn" onclick="sendMessage()">Retry</button>`;
+      }
     }
   } finally {
     sending = false;
@@ -602,48 +572,12 @@ async function reconnectToStream(convId, nodeIdx) {
   if (!response.ok) return null;
 
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
   let content = "";
-  let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-
-    // Keep the last incomplete line in buffer
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data: ")) continue;
-
-      const data = trimmed.slice(6);
-      if (data === "[DONE]") break;
-
-      try {
-        const parsed = JSON.parse(data);
-        if (parsed.content) {
-          content += parsed.content;
-        }
-      } catch {}
-    }
-  }
-
-  // Process any remaining buffer
-  if (buffer.trim().startsWith("data: ")) {
-    const data = buffer.trim().slice(6);
-    if (data !== "[DONE]") {
-      try {
-        const parsed = JSON.parse(data);
-        if (parsed.content) {
-          content += parsed.content;
-        }
-      } catch {}
-    }
-  }
+  await parseSSEStream(reader, {
+    onReplay: (c) => { content = c; },
+    onContent: (c) => { content += c; },
+  });
 
   return content;
 }
@@ -698,6 +632,49 @@ function esc(s) {
   const d = document.createElement("div");
   d.textContent = s || "";
   return d.innerHTML;
+}
+
+function parseSSEStream(reader, { onContent, onReplay, onDone, onError }) {
+  return new Promise(async (resolve) => {
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data: ")) continue;
+        const data = trimmed.slice(6);
+        if (data === "[DONE]") { onDone?.(); resolve(); return; }
+
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.replay) onReplay?.(parsed.replay);
+          if (parsed.content) onContent?.(parsed.content);
+          if (parsed.error) onError?.(parsed.error);
+        } catch {}
+      }
+    }
+
+    if (buffer.trim().startsWith("data: ")) {
+      const data = buffer.trim().slice(6);
+      if (data !== "[DONE]") {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.replay) onReplay?.(parsed.replay);
+          if (parsed.content) onContent?.(parsed.content);
+          if (parsed.error) onError?.(parsed.error);
+        } catch {}
+      }
+    }
+    resolve();
+  });
 }
 
 // --- Init ---

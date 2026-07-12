@@ -1,7 +1,17 @@
 import { Hono } from "hono";
-import { Env, User, ChatNode, now, uuid, blobToHex, hexToBytes } from "../lib/types";
+import { Env, User, ChatNode, now, uuid, blobToHex, hexToBytes, LLMMessage } from "../lib/types";
 import { callLLM, buildSystemPrompt } from "../lib/llm";
 import { getNextIdx, buildContext, parseHeadings } from "../lib/context";
+
+interface ChatSessionDOStub {
+  chat(
+    messages: LLMMessage[],
+    modelId: string | undefined,
+    convId: string,
+    nodeIdx: Uint8Array,
+    userMessage: { user_content: string; prefix_idx: Uint8Array; title: string; user_id: number | null }
+  ): Promise<Response>;
+}
 
 export function createChatRoutes() {
   const api = new Hono<{ Bindings: Env; Variables: { user?: User } }>();
@@ -181,15 +191,20 @@ export function createChatRoutes() {
     ];
 
     const doId = c.env.CHAT_SESSION_DO.idFromName(d.conv_id);
-    const stub = c.env.CHAT_SESSION_DO.get(doId) as any;
+    const stub = c.env.CHAT_SESSION_DO.get(doId) as unknown as ChatSessionDOStub;
 
-    const response = await stub.chat(llmMessages, d.model_id, d.conv_id, newIdxBytes);
-
-    const ts = now();
-    await c.env.DB.prepare(
-      `INSERT INTO chat_nodes (conv_id, idx, title, prefix_idx, user_id, user_content, assistant_content, meta, created_at)
-       VALUES (?, ?, '', ?, ?, ?, '', ?, ?)`
-    ).bind(d.conv_id, newIdxBytes, hexToBytes(prefixHex), user?.id ?? null, d.message, JSON.stringify({ model_id: d.model_id || "", status: "streaming" }), ts).run();
+    const response = await stub.chat(
+      llmMessages,
+      d.model_id,
+      d.conv_id,
+      newIdxBytes,
+      {
+        user_content: d.message,
+        prefix_idx: hexToBytes(prefixHex),
+        title: d.message.slice(0, 50),
+        user_id: user?.id ?? null,
+      }
+    );
 
     return new Response(response.body, {
       headers: {

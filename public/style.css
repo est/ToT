@@ -702,7 +702,29 @@ dialog::backdrop { background: rgba(0, 0, 0, .3); backdrop-filter: blur(2px); }
 }
 
 .msg-loading .msg-body { color: var(--text-muted); font-style: italic; }
-.msg-error .msg-body { color: #dc2626; font-size: 13px; }
+.msg-error .msg-body {
+  color: #dc2626;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.msg-retry-btn {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 6px 16px;
+  background: var(--bg-white);
+  color: var(--green-700);
+  border: 1px solid var(--green-300);
+  border-radius: var(--radius);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.msg-retry-btn:hover {
+  background: var(--green-50);
+}
 
 .msg-content { max-width: 90%; }
 
