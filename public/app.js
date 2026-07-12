@@ -172,6 +172,29 @@ function renderGraph() {
   const laneMap = new Map();
   let maxLane = 0;
 
+  // Build parent -> children map
+  const childrenOf = new Map();
+  for (const node of treeNodes) {
+    const idx = node.idx.toLowerCase();
+    const prefix = (node.prefix_idx || "").toLowerCase();
+    const scatterFrom = node.scatter_from ? node.scatter_from.toLowerCase() : null;
+    
+    let parentId = null;
+    if (scatterFrom) {
+      parentId = scatterFrom;
+    } else if (prefix) {
+      parentId = prefix.slice(-4);
+    }
+    
+    if (parentId) {
+      if (!childrenOf.has(parentId)) childrenOf.set(parentId, []);
+      childrenOf.get(parentId).push(idx);
+    }
+  }
+
+  // Assign lanes: first child inherits parent lane, subsequent children get new lanes
+  const childIndex = new Map(); // track which child number we're on for each parent
+
   for (const node of treeNodes) {
     const idx = node.idx.toLowerCase();
     const prefix = (node.prefix_idx || "").toLowerCase();
@@ -179,10 +202,22 @@ function renderGraph() {
 
     if (scatterFrom) {
       const parentLane = laneMap.get(scatterFrom) ?? 0;
-      laneMap.set(idx, parentLane + 1);
+      const siblings = childrenOf.get(scatterFrom) || [];
+      const myIndex = siblings.indexOf(idx);
+      laneMap.set(idx, parentLane + 1 + (myIndex > 0 ? myIndex : 0));
     } else if (prefix) {
       const lastAncestor = prefix.slice(-4);
-      laneMap.set(idx, laneMap.get(lastAncestor) ?? 0);
+      const parentLane = laneMap.get(lastAncestor) ?? 0;
+      const siblings = childrenOf.get(lastAncestor) || [];
+      const myIndex = siblings.indexOf(idx);
+      
+      if (myIndex <= 0) {
+        // First child: inherit parent lane
+        laneMap.set(idx, parentLane);
+      } else {
+        // Subsequent children: offset to new lane
+        laneMap.set(idx, parentLane + myIndex);
+      }
     } else {
       laneMap.set(idx, 0);
     }
